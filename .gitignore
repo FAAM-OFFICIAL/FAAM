@@ -1,0 +1,23 @@
+# --- Secrets & built artifacts: never commit these ---
+# API keys / Stripe keys / session secrets
+key
+*.key
+stripe_key
+session_secret
+google_oauth.json
+.env
+.env.*
+
+# Per-user FAAM data (accounts, usage, watchlist, etc.)
+.faam/
+faam-*/
+
+# Built download bundles — the PRIVATE one has a baked-in key!
+*.zip
+FAAM.app/
+faamview            # compiled binary (ship a signed one separately)
+
+# Python / macOS cruft
+__pycache__/
+*.pyc
+.DS_Store

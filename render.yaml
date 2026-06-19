@@ -1,0 +1,29 @@
+# Render blueprint for the FAAM backend.
+# 1) Push this repo to GitHub.  2) Render → New → Blueprint → pick the repo.
+# 3) Fill the secret env vars (OPENAI_API_KEY, STRIPE_SECRET_KEY, FAAM_BASE_URL).
+# FAAM is stdlib-only, so there's nothing to build — it just runs.
+services:
+  - type: web
+    name: faam
+    runtime: python
+    plan: starter            # needs a paid plan for the persistent disk below
+    buildCommand: ""         # no dependencies to install
+    startCommand: python3 app.py
+    healthCheckPath: /api/health
+    disk:
+      name: faam-data        # keeps accounts/usage across deploys
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: FAAM_DATA_DIR
+        value: /var/data
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: FAAM_SESSION_SECRET
+        generateValue: true  # Render makes a stable random secret
+      - key: FAAM_BASE_URL
+        sync: false          # set to https://<your-render-url> in the dashboard
+      - key: OPENAI_API_KEY
+        sync: false          # your OpenAI key — dashboard only, never in the repo
+      - key: STRIPE_SECRET_KEY
+        sync: false          # your Stripe secret key — dashboard only

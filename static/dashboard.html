@@ -1,0 +1,906 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FAAM · Dashboard</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://rsms.me" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <script>
+    /* Dashboard is light-themed. Lock it before paint and clear any stale preference. */
+    (function () {
+      document.documentElement.dataset.theme = 'light';
+      try { localStorage.setItem('faam-theme', 'light'); } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+  <script src="/app.js" defer></script>
+</head>
+<body class="app">
+  <!-- FAAM loading splash — shows while the dashboard boots, and promotes the TikTok -->
+  <div id="bootScreen" class="boot" role="dialog" aria-label="FAAM is loading" aria-live="polite">
+    <div class="boot-inner">
+      <div class="boot-brand">
+        <span class="boot-mark">
+          <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true">
+            <defs><linearGradient id="bootLg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#4f8cff"/><stop offset="100%" stop-color="#7c5cff"/></linearGradient></defs>
+            <path fill="url(#bootLg)" d="M3 21V3h2v14l5-7 4 5 7-10v16H3z"/>
+          </svg>
+        </span>
+        <span class="boot-word">FAAM</span>
+      </div>
+      <h1 class="boot-title">FAAM is loading<span class="boot-dots"><i>.</i><i>.</i><i>.</i></span></h1>
+      <p class="boot-sub" id="bootSub">Spinning up your financial AI dashboard…</p>
+      <div class="boot-bar"><span class="boot-bar-fill" id="bootBar"></span></div>
+
+      <div class="boot-tok">
+        <div class="boot-tok-head">
+          <span class="boot-tok-logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16.5 3c.4 2.2 1.7 3.7 3.9 3.9v2.5c-1.3.1-2.6-.3-3.8-1v5.9c0 3.3-2.4 5.7-5.5 5.7A5.4 5.4 0 0 1 5.6 14a5.3 5.3 0 0 1 6-5.3v2.7a2.7 2.7 0 0 0-3.4 2.6 2.6 2.6 0 0 0 5.2.1V3h3.1z"/></svg>
+          </span>
+          <span class="boot-tok-text">Trending now — <strong>watch FAAM on TikTok</strong></span>
+          <span class="boot-tok-handle">@faam0fficial</span>
+        </div>
+        <div class="boot-tok-embed">
+          <blockquote class="tiktok-embed" cite="https://www.tiktok.com/@faam0fficial/video/7652156248036511006" data-video-id="7652156248036511006" style="max-width: 605px;min-width: 325px;">
+            <section>
+              <a target="_blank" title="@faam0fficial" href="https://www.tiktok.com/@faam0fficial?refer=embed">@faam0fficial</a>
+              FAAM <a title="product" target="_blank" href="https://www.tiktok.com/tag/product?refer=embed">#product</a>
+              <a title="fyp" target="_blank" href="https://www.tiktok.com/tag/fyp?refer=embed">#fyp</a>
+              <a title="viral" target="_blank" href="https://www.tiktok.com/tag/viral?refer=embed">#viral</a>
+              <a title="finance" target="_blank" href="https://www.tiktok.com/tag/finance?refer=embed">#finance</a>
+              <a title="popular" target="_blank" href="https://www.tiktok.com/tag/popular?refer=embed">#popular</a>
+              <a target="_blank" title="♬ original sound - prodbyzy4" href="https://www.tiktok.com/music/original-sound-7391823695851571974?refer=embed">♬ original sound - prodbyzy4</a>
+            </section>
+          </blockquote>
+        </div>
+        <a class="boot-tok-btn" id="bootTokBtn" href="https://www.tiktok.com/@faam0fficial/video/7652156248036511006" target="_blank" rel="noopener noreferrer">▶ Watch on TikTok</a>
+      </div>
+
+      <button type="button" class="boot-enter" id="bootEnter" disabled>Getting ready…</button>
+      <label class="boot-skip" id="bootSkipRow" hidden><input type="checkbox" id="bootSkip" /> Skip the intro next time</label>
+      <p class="boot-watch-note" id="bootWatchNote" hidden>
+        On Lite, the intro plays at every launch.
+        <button type="button" class="boot-upsell" id="bootUpsell">Upgrade to skip it ▸</button>
+      </p>
+    </div>
+    <script async src="https://www.tiktok.com/embed.js"></script>
+  </div>
+  <script>
+    /* Paid tiers (Pro/Max/Elite) can remove the intro; Lite & free must watch it.
+       Only skip before paint when the user opted in AND is on a paid tier. */
+    (function () {
+      try {
+        if (localStorage.getItem('faam-skip-splash') === '1' &&
+            localStorage.getItem('faam-can-skip') === '1') {
+          var b = document.getElementById('bootScreen'); if (b) b.parentNode.removeChild(b);
+        }
+      } catch (e) {}
+    })();
+  </script>
+
+  <!-- Auto-update overlay: shown when a newer FAAM build goes live, then reloads -->
+  <div id="updateScreen" class="updating" hidden>
+    <div class="updating-inner">
+      <span class="updating-mark" aria-hidden="true">
+        <span class="updating-ring"></span>
+        <svg viewBox="0 0 24 24" width="40" height="40">
+          <defs><linearGradient id="updLg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#4f8cff"/><stop offset="100%" stop-color="#7c5cff"/></linearGradient></defs>
+          <path fill="url(#updLg)" d="M3 21V3h2v14l5-7 4 5 7-10v16H3z"/>
+        </svg>
+      </span>
+      <h1 class="updating-title">FAAM is updating<span class="boot-dots"><i>.</i><i>.</i><i>.</i></span></h1>
+      <p class="updating-sub">Getting the latest version — just a moment.</p>
+      <div class="boot-bar updating-bar"><span class="boot-bar-fill"></span></div>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <a href="/" class="home-link" title="FAAM home" aria-label="FAAM home">
+        <span class="logo-mark">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <defs>
+              <linearGradient id="lg1" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#4f8cff"/>
+                <stop offset="100%" stop-color="#7c5cff"/>
+              </linearGradient>
+            </defs>
+            <path fill="url(#lg1)" d="M3 21V3h2v14l5-7 4 5 7-10v16H3z"/>
+          </svg>
+        </span>
+      </a>
+      <div class="wordmark">
+        <span class="logo">FAAM</span>
+        <span class="tagline">Financial AI Agent Manager</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="status">
+        <span class="dot" id="aiDot"></span>
+        <span id="aiStatus">connecting…</span>
+      </div>
+      <div class="market-clock" id="marketClock">—</div>
+      <button class="pro-pill" id="proBtn" title="FAAM Pro">Upgrade</button>
+      <button class="iconbtn" id="screenerBtn" aria-label="AI screener" title="AI screener — scan stocks in plain English">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M20 20l-3.5-3.5"/>
+        </svg>
+      </button>
+      <button class="iconbtn" id="learnBtn" aria-label="Learn" title="Learn — ask the FAAM tutor">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M12 3 1 9l11 6 9-4.9V17h2V9L12 3zM5 13.2V17l7 3.8 7-3.8v-3.8l-7 3.8-7-3.8z"/>
+        </svg>
+      </button>
+      <button class="iconbtn" id="recapBtn" aria-label="Daily recap video" title="Daily recap video">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M4 5h11a2 2 0 0 1 2 2v1.8l3.3-2.2a.5.5 0 0 1 .7.4v10a.5.5 0 0 1-.7.4L17 15.2V17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/>
+        </svg>
+      </button>
+      <button class="iconbtn" id="adviserBtn" aria-label="Adviser profile" title="Financial adviser profile">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M10 4h4a2 2 0 0 1 2 2v1h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V6a2 2 0 0 1 2-2zm0 3h4V6h-4v1z"/>
+        </svg>
+        <span class="adviser-dot" id="adviserDot"></span>
+      </button>
+      <button class="token-chip" id="tokenChip" title="Game of Stocks" hidden>
+        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor" opacity=".25"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M12 7.2a4.8 4.8 0 1 0 0 9.6 4.8 4.8 0 0 0 0-9.6zm.9 6.9h-1.8v.9h-.9v-.9H9.6v-.9h2.4a.45.45 0 0 0 0-.9h-1.5a1.35 1.35 0 0 1 0-2.7h.6V8.7h.9v.9h1.5v.9h-2.4a.45.45 0 0 0 0 .9h1.5a1.35 1.35 0 0 1 0 2.7z"/></svg>
+        <span id="tokenChipVal">0</span>
+      </button>
+      <button class="iconbtn game-btn" id="gameBtn" aria-label="Game of Stocks" title="Game of Stocks" hidden>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 7h10a5 5 0 0 1 5 5 4 4 0 0 1-7 3l-1-1H10l-1 1a4 4 0 0 1-7-3 5 5 0 0 1 5-5zm0 3v1.5H5.5V13H7v1.5h1.5V13H10v-1.5H8.5V10H7zm9 .25a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm2 2.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>
+      </button>
+      <button class="iconbtn" id="browserBtn" aria-label="Open in browser" title="Open FAAM in your web browser" hidden>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path fill="none" stroke="currentColor" stroke-width="2" d="M3 12h18M12 3c2.6 2.7 2.6 15.3 0 18M12 3c-2.6 2.7-2.6 15.3 0 18"/>
+        </svg>
+      </button>
+      <button class="iconbtn" id="layoutBtn" aria-label="Customize dashboard" title="Customize dashboard">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M4 4h7v7H4zM13 4h7v4h-7zM13 11h7v9h-7zM4 13h7v7H4z"/>
+        </svg>
+      </button>
+      <button class="iconbtn" id="settingsBtn" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M19.14 12.94a7.97 7.97 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a8 8 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a8 8 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a8 8 0 0 0 0 1.88L2.83 14.52a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96a8 8 0 0 0 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a8 8 0 0 0 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/>
+        </svg>
+      </button>
+      <button class="avatar" id="accountBtn" aria-label="Account">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <circle cx="12" cy="8" r="4" fill="currentColor"/>
+          <path d="M4 21c0-4 4-7 8-7s8 3 8 7" fill="currentColor"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="beginner-banner" id="beginnerBanner">
+    <span class="bb-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2 1 8l11 6 9-4.9V16h2V8L12 2zM6 13.2V16l6 3.3 6-3.3v-2.8l-6 3.3-6-3.3z"/></svg>
+    </span>
+    <span class="bb-text"><b>Beginner mode is on.</b> New here? Take the quick tour and we'll walk you through everything.</span>
+    <button class="bb-btn" id="beginnerTour" type="button">Take the tour</button>
+    <button class="bb-x" id="beginnerBannerX" type="button" aria-label="Hide for now">
+      <svg viewBox="0 0 24 24" width="14" height="14"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+
+  <section class="ticker-rail" id="tickerRail" aria-label="Watchlist">
+    <div class="tcard sk"></div><div class="tcard sk"></div><div class="tcard sk"></div>
+    <div class="tcard sk"></div><div class="tcard sk"></div><div class="tcard sk"></div>
+  </section>
+
+  <main class="content">
+    <div class="grid">
+      <section class="panel chart-panel">
+        <header class="panel-head">
+          <div class="symhead">
+            <h2 id="symName">Loading…</h2>
+            <div class="symmeta">
+              <span id="symSymbol" class="sym-tag">—</span>
+              <span id="symExchange" class="muted">—</span>
+            </div>
+          </div>
+          <div class="pricehead">
+            <div id="symPrice" class="price">—</div>
+            <div id="symChange" class="change">—</div>
+            <div id="symExt" class="ext-change" hidden></div>
+            <button class="buy-btn" id="headerBuyBtn">Buy ▸</button>
+          </div>
+        </header>
+
+        <div class="chart-controls">
+          <div class="range-tabs" id="rangeTabs">
+            <button data-range="1d" data-interval="5m">1D</button>
+            <button data-range="5d" data-interval="30m">1W</button>
+            <button data-range="1mo" data-interval="1d" class="active">1M</button>
+            <button data-range="3mo" data-interval="1d">3M</button>
+            <button data-range="1y" data-interval="1d">1Y</button>
+            <button data-range="5y" data-interval="1wk">5Y</button>
+          </div>
+          <div class="indicator-tabs">
+            <button id="smaToggle" class="chip-toggle" title="Toggle moving averages">SMA 20 / 50</button>
+          </div>
+        </div>
+
+        <div class="view-tabs" id="viewTabs" role="tablist" aria-label="Chart view">
+          <button data-view="line" class="active" title="Price line">Line</button>
+          <button data-view="candles" data-pro="forecast" title="Candlesticks — Pro">Candles</button>
+          <button data-view="returns" data-pro="forecast" title="Percent return — Pro">% Return</button>
+          <button data-view="forecast" data-pro="forecast" title="Predictive forecast — Pro">Forecast</button>
+          <span class="view-spacer"></span>
+          <span class="pro-hint" id="viewProHint" hidden>Pro</span>
+        </div>
+
+        <div class="chart-wrap">
+          <canvas id="mainChart"></canvas>
+        </div>
+
+        <!-- Predictive forecast details (Forecast view, Pro+) -->
+        <div class="forecast-panel" id="forecastPanel" hidden>
+          <div class="fc-head">
+            <div class="fc-title">
+              <span class="fc-badge">PREDICTIVE</span>
+              <span class="beta-badge">BETA</span>
+              <span class="fc-model-name" id="fcModelName">Apollo</span>
+              <span class="fc-kind" id="fcModelKind">Drift &amp; volatility engine</span>
+            </div>
+            <div class="fc-head-right">
+              <div class="fc-horizon-tabs" id="fcHorizonTabs" aria-label="Forecast horizon">
+                <button data-h="7">1W</button>
+                <button data-h="30" class="active">1M</button>
+                <button data-h="90">3M</button>
+              </div>
+            </div>
+          </div>
+          <div class="fc-stats" id="fcStats"></div>
+          <div class="news-panel" id="newsPanel" hidden></div>
+          <div class="markets-panel" id="marketsPanel" hidden></div>
+          <p class="fc-disclaimer">
+            Model estimate from historical drift &amp; volatility — a probability cone,
+            not a guarantee. Information, not financial advice.
+          </p>
+        </div>
+
+        <div class="kpi-row">
+          <div class="kpi"><label>Day Low</label><span id="kpiLow">—</span></div>
+          <div class="kpi"><label>Day High</label><span id="kpiHigh">—</span></div>
+          <div class="kpi"><label>Volume</label><span id="kpiVol">—</span></div>
+          <div class="kpi"><label>52W Low</label><span id="kpi52L">—</span></div>
+          <div class="kpi"><label>52W High</label><span id="kpi52H">—</span></div>
+        </div>
+      </section>
+
+      <aside class="panel ai-panel">
+        <header class="panel-head">
+          <div class="ai-title">
+            <span class="ai-badge">AI</span>
+            <h3>Agent Insights</h3>
+          </div>
+          <button class="ghostbtn" id="refreshAI" title="Re-run agent">↻ Refresh</button>
+        </header>
+        <div class="ai-body" id="aiBody">
+          <p class="muted small">Select a stock to get an AI take.</p>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Portfolio -->
+    <section class="panel portfolio-panel">
+      <header class="panel-head">
+        <div class="ai-title">
+          <span class="pf-badge">$</span>
+          <h3>Portfolio</h3>
+        </div>
+        <div class="pf-head-right">
+          <div class="pf-summary" id="pfSummary"></div>
+          <button class="ghostbtn" id="addPositionBtn">+ Add position</button>
+        </div>
+      </header>
+      <div class="pf-table-wrap">
+        <table class="pf-table">
+          <thead>
+            <tr>
+              <th>Holding</th>
+              <th>Shares</th>
+              <th>Avg cost</th>
+              <th>Price</th>
+              <th>Mkt value</th>
+              <th>Unrealized P&amp;L</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="pfBody"></tbody>
+        </table>
+        <div class="pf-empty" id="pfEmpty">No positions yet. Click <strong>+ Add position</strong> to track your holdings.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="actionbar">
+    <div class="actions">
+      <button class="action primary" id="investBtn">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 17v2h18v-2H3zm4-2h2v-6H7v6zm4 0h2V7h-2v8zm4 0h2v-4h-2v4z"/></svg>
+        Invest
+      </button>
+      <button class="action" id="compareBtn">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 4h6v16H5zM13 4h6v10h-6z"/></svg>
+        Compare
+      </button>
+      <button class="action" id="watchBtn">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        Add to watchlist
+      </button>
+    </div>
+    <form class="chatbar" id="chatForm" autocomplete="off">
+      <span class="chat-pre">Ask FAAM</span>
+      <input id="chatInput" type="text" placeholder="What's the outlook on this stock?" />
+      <button type="button" id="voiceBtn" class="voice-btn" aria-label="Voice mode" title="Voice mode — talk to FAAM">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+      </button>
+      <button type="submit" id="sendBtn" aria-label="Send">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 11l18-8-8 18-2-8-8-2z"/></svg>
+      </button>
+    </form>
+  </footer>
+
+  <!-- Chat dialog -->
+  <dialog id="chatDialog" class="chat-dialog">
+    <header>
+      <h3>Chat with FAAM</h3>
+      <button class="iconbtn" id="closeChat" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="chat-log" id="chatLog"></div>
+    <form class="chat-inline" id="dialogForm">
+      <input id="dialogInput" type="text" placeholder="Follow up…" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </dialog>
+
+  <!-- Add position dialog -->
+  <dialog id="positionDialog" class="form-dialog">
+    <header>
+      <h3>Add position</h3>
+      <button class="iconbtn" id="closePosition" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <form id="positionForm">
+      <div class="form-body">
+        <div class="field">
+          <label for="posSymbol">Ticker</label>
+          <input id="posSymbol" type="text" placeholder="AAPL" autocomplete="off" />
+        </div>
+        <div class="seg" id="posModeSeg">
+          <button type="button" class="seg-btn active" data-mode="shares">Shares</button>
+          <button type="button" class="seg-btn" data-mode="dollars">$ Amount</button>
+        </div>
+        <div class="form-row" id="sharesMode">
+          <div class="field">
+            <label for="posShares">Shares</label>
+            <input id="posShares" type="number" step="any" min="0" placeholder="10" />
+          </div>
+          <div class="field">
+            <label for="posCost">Avg cost / share</label>
+            <input id="posCost" type="number" step="any" min="0" placeholder="150.00" />
+          </div>
+        </div>
+        <div class="field" id="dollarMode" hidden>
+          <label for="posAmount">Amount to invest ($)</label>
+          <input id="posAmount" type="number" step="any" min="0" placeholder="500.00" />
+          <span class="hint">Buys fractional shares at the current market price.</span>
+        </div>
+      </div>
+      <div class="form-err" id="posErr"></div>
+      <div class="form-actions">
+        <button type="submit">Add position</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Add ticker dialog -->
+  <dialog id="tickerDialog" class="form-dialog">
+    <header>
+      <h3>Add to watchlist</h3>
+      <button class="iconbtn" id="closeTicker" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <form id="tickerForm">
+      <div class="form-body">
+        <div class="field">
+          <label for="tickerSymbol">Ticker symbol</label>
+          <input id="tickerSymbol" type="text" placeholder="e.g. PLTR, BTC-USD, ^GSPC" autocomplete="off" required />
+          <span class="hint">Any Yahoo Finance symbol — stocks, ETFs, crypto, or indices.</span>
+        </div>
+      </div>
+      <div class="form-err" id="tickerErr"></div>
+      <div class="form-actions">
+        <button type="submit">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Adviser profile dialog -->
+  <dialog id="adviserDialog" class="form-dialog adviser-dialog">
+    <header>
+      <h3>Financial Adviser profile</h3>
+      <button class="iconbtn" id="closeAdviser" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <form id="adviserForm">
+      <div class="form-body">
+        <p class="muted small" style="margin:0">
+          Give FAAM's AI a persona and rules. It's layered on top of every insight and
+          chat reply. Upload a <span class="mono">.md</span> / <span class="mono">.txt</span>
+          file, or write your own. Saved locally to <span class="mono">~/.faam/adviser.md</span>.
+        </p>
+        <div class="adviser-tools">
+          <label class="upload-btn">
+            <input type="file" id="adviserFile" accept=".md,.txt,.markdown,text/plain" hidden />
+            <svg viewBox="0 0 24 24" width="15" height="15"><path fill="currentColor" d="M12 3l5 5h-3v6h-4V8H7l5-5zM5 19h14v2H5z"/></svg>
+            Upload file
+          </label>
+          <button type="button" class="ghostbtn" id="adviserTemplate">Use template</button>
+          <span class="adviser-count mono small muted" id="adviserCount">0</span>
+        </div>
+        <div class="field">
+          <textarea id="adviserText" class="adviser-text" rows="12"
+            placeholder="e.g. You are a conservative, long-horizon adviser. Favor diversified, low-cost index exposure. Always flag valuation risk and remind the user about position sizing…"></textarea>
+        </div>
+      </div>
+      <div class="form-err" id="adviserErr"></div>
+      <div class="form-actions">
+        <button type="button" class="ghostbtn" id="adviserClear">Clear</button>
+        <button type="submit">Save profile</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- AI Screener dialog -->
+  <dialog id="screenerDialog" class="form-dialog screener-dialog">
+    <header>
+      <h3>AI Screener</h3>
+      <button class="iconbtn" id="closeScreener" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <form id="screenerForm">
+      <div class="form-body">
+        <p class="muted small" style="margin:0">
+          Describe what you're looking for in plain English. FAAM scans a universe of
+          liquid tickers with live data and ranks the best matches — no code, no filters.
+        </p>
+        <div class="chips" id="screenerChips">
+          <button type="button" class="chip" data-q="Stocks near their 52-week lows that could be oversold">Near 52-week lows</button>
+          <button type="button" class="chip" data-q="Today's biggest movers, up or down">Today's movers</button>
+          <button type="button" class="chip" data-q="High-momentum tech names trading near 52-week highs">Momentum tech</button>
+          <button type="button" class="chip" data-q="Lower-volatility, defensive large caps for a cautious investor">Defensive large caps</button>
+        </div>
+        <div class="field">
+          <input id="screenerInput" type="text" autocomplete="off"
+            placeholder="e.g. beaten-down megacaps trading well below their highs" />
+        </div>
+      </div>
+      <div class="form-err" id="screenerErr"></div>
+      <div class="form-actions">
+        <button type="submit" id="screenerRun">Run scan</button>
+      </div>
+    </form>
+    <div class="screener-results" id="screenerResults"></div>
+  </dialog>
+
+  <!-- Learn dialog -->
+  <dialog id="learnDialog" class="form-dialog learn-dialog">
+    <header>
+      <h3>Learn with FAAM</h3>
+      <button class="iconbtn" id="closeLearn" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <form id="learnForm">
+      <div class="form-body">
+        <p class="muted small" style="margin:0">Ask anything about investing — explained simply, with examples.</p>
+        <div class="chips" id="learnChips">
+          <button type="button" class="chip" data-q="What is a P/E ratio and why does it matter?">P/E ratio</button>
+          <button type="button" class="chip" data-q="What's the difference between a stock and an ETF?">Stocks vs ETFs</button>
+          <button type="button" class="chip" data-q="How do options work, in simple terms?">Options basics</button>
+          <button type="button" class="chip" data-q="What is dollar-cost averaging?">Dollar-cost averaging</button>
+          <button type="button" class="chip" data-q="What is market capitalization?">Market cap</button>
+        </div>
+        <div class="field">
+          <input id="learnInput" type="text" autocomplete="off" placeholder="Ask a question…" />
+        </div>
+      </div>
+      <div class="form-err" id="learnErr"></div>
+      <div class="form-actions">
+        <button type="submit">Ask</button>
+      </div>
+    </form>
+    <div class="learn-answer" id="learnAnswer"></div>
+  </dialog>
+
+  <!-- Order ticket (handoff) dialog -->
+  <dialog id="orderDialog" class="form-dialog order-dialog">
+    <header>
+      <h3>Order ticket</h3>
+      <button class="iconbtn" id="closeOrder" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <form id="orderForm">
+      <div class="form-body">
+        <div class="order-note">
+          FAAM <strong>prepares</strong> this order — you review and place it in your
+          broker. FAAM never submits trades or moves money.
+        </div>
+        <div class="order-ai">
+          <span class="order-ai-badge">AI</span>
+          <input id="orderAiText" type="text" autocomplete="off" placeholder="Describe it — “buy $500 of Apple”" />
+          <button type="button" class="order-ai-btn" id="orderAiFill">Fill</button>
+        </div>
+        <div class="seg" id="orderSideSeg">
+          <button type="button" class="seg-btn active" data-side="buy">Buy</button>
+          <button type="button" class="seg-btn" data-side="sell">Sell</button>
+        </div>
+        <div class="field">
+          <label for="orderSymbol">Ticker</label>
+          <input id="orderSymbol" type="text" placeholder="AAPL" autocomplete="off" />
+        </div>
+        <div class="seg" id="orderModeSeg">
+          <button type="button" class="seg-btn active" data-mode="shares">Shares</button>
+          <button type="button" class="seg-btn" data-mode="dollars">$ Amount</button>
+        </div>
+        <div class="field">
+          <label for="orderQty" id="orderQtyLabel">Shares</label>
+          <input id="orderQty" type="number" step="any" min="0" placeholder="1" />
+        </div>
+        <div class="chips" id="amountChips">
+          <button type="button" class="chip" data-amt="100">$100</button>
+          <button type="button" class="chip" data-amt="250">$250</button>
+          <button type="button" class="chip" data-amt="500">$500</button>
+          <button type="button" class="chip" data-amt="1000">$1,000</button>
+        </div>
+        <div class="order-estimate" id="orderEstimate">—</div>
+        <div class="field">
+          <label for="brokerSelect">Your broker</label>
+          <select id="brokerSelect" class="broker-select">
+            <option value="robinhood">Robinhood</option>
+            <option value="fidelity">Fidelity</option>
+            <option value="schwab">Charles Schwab</option>
+            <option value="etrade">E*TRADE</option>
+            <option value="webull">Webull</option>
+            <option value="coinbase">Coinbase (crypto)</option>
+            <option value="other">Other / search</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-err" id="orderErr"></div>
+      <div class="form-actions order-actions">
+        <button type="button" class="ghostbtn" id="orderTrack">Track in portfolio</button>
+        <button type="submit" id="orderReview">Review at broker →</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- FAAM Pro upgrade -->
+  <dialog id="proDialog" class="form-dialog pro-dialog">
+    <header>
+      <h3>Choose your plan</h3>
+      <button class="iconbtn" id="closePro" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="form-body">
+      <div id="proConnect" hidden>
+        <div class="field">
+          <label for="stripeKey">Connect Stripe (secret key)</label>
+          <input id="stripeKey" type="password" placeholder="sk_test_… or sk_live_…" autocomplete="off" />
+          <span class="hint">Stored only on this Mac (<span class="mono">~/.faam/stripe_key</span>), sent only to Stripe. Use a <strong>test</strong> key to try it — test card <span class="mono">4242 4242 4242 4242</span>.</span>
+        </div>
+        <button type="button" id="stripeConnectBtn" class="pro-cta">Connect Stripe</button>
+      </div>
+      <div id="proPlans" class="plan-grid"></div>
+      <p class="pro-active" id="proActive" hidden></p>
+      <div class="form-err" id="proErr"></div>
+    </div>
+  </dialog>
+
+  <!-- Daily recap video -->
+  <dialog id="recapDialog" class="recap-dialog">
+    <button class="iconbtn recap-close" id="recapClose" aria-label="Close">
+      <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="recap-stage">
+      <canvas id="recapCanvas" width="1280" height="720"></canvas>
+      <div class="recap-overlay-msg" id="recapMsg">Generating today's recap…</div>
+    </div>
+    <div class="recap-controls">
+      <button class="action primary" id="recapPlay" disabled>▶ Play recap</button>
+      <button class="action" id="recapDownload" disabled>⤓ Save video</button>
+      <span class="recap-status muted small" id="recapStatus"></span>
+    </div>
+  </dialog>
+
+  <!-- Voice mode overlay -->
+  <dialog id="voiceDialog" class="voice-dialog">
+    <button class="iconbtn voice-close" id="voiceClose" aria-label="Close voice mode">
+      <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="voice-orb" id="voiceOrb" role="button" tabindex="0" aria-label="Start or stop listening">
+      <span class="voice-rings"><i></i><i></i><i></i></span>
+      <svg class="voice-mic" viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+      <span class="voice-eq"><i></i><i></i><i></i><i></i><i></i></span>
+    </div>
+    <div class="voice-status" id="voiceStatus">Tap the mic and start talking</div>
+    <div class="voice-transcript">
+      <p class="vt-you" id="voiceYou"></p>
+      <p class="vt-ai" id="voiceAI"></p>
+    </div>
+    <div class="voice-hint muted small">Speaks back using your OpenAI voice. Esc to close.</div>
+  </dialog>
+
+  <!-- Account menu -->
+  <dialog id="accountDialog" class="form-dialog account-dialog">
+    <header>
+      <h3>Account</h3>
+      <button class="iconbtn" id="closeAccount" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="form-body">
+      <div class="acct-row">
+        <span class="acct-avatar" id="acctAvatar">U</span>
+        <div>
+          <div class="acct-name" id="acctName">—</div>
+          <div class="acct-meta muted small" id="acctMeta"></div>
+        </div>
+        <span class="acct-badge" id="acctBadge"></span>
+      </div>
+      <button type="button" id="logoutBtn" class="acct-logout">Log out</button>
+    </div>
+  </dialog>
+
+  <!-- Settings -->
+  <!-- Customize dashboard: Default · Build your own · AI-designed -->
+  <dialog id="layoutDialog" class="form-dialog layout-dialog">
+    <header>
+      <h3>Customize dashboard</h3>
+      <button class="iconbtn" id="closeLayout" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="form-body">
+      <div class="seg lay-seg" id="layoutSeg">
+        <button type="button" class="seg-btn active" data-mode="default">Default</button>
+        <button type="button" class="seg-btn" data-mode="custom">Build your own</button>
+        <button type="button" class="seg-btn" data-mode="ai">AI design</button>
+      </div>
+
+      <div class="lay-pane" id="layPaneDefault">
+        <p class="muted small">The standard FAAM layout — watchlist on top, the price chart with AI insights beside it, then your portfolio.</p>
+        <button type="button" class="primary-btn lay-wide" id="layUseDefault">Use the default layout</button>
+      </div>
+
+      <div class="lay-pane hide" id="layPaneCustom">
+        <p class="muted small">Toggle the panels you want and reorder them with the arrows. Changes apply live.</p>
+        <div class="lay-list" id="layList"></div>
+      </div>
+
+      <div class="lay-pane hide" id="layPaneAi">
+        <p class="muted small">Describe how you invest and <strong>GPT-4.1 mini</strong> designs a dashboard for you. You can fine-tune it afterward under “Build your own.”</p>
+        <textarea id="layAiPrompt" rows="3" class="lay-ai-input" placeholder="e.g. I'm a long-term dividend investor — put my portfolio first and keep it clean."></textarea>
+        <div class="lay-ai-chips" id="layAiChips">
+          <button type="button" class="chip" data-p="I'm a day trader — charts first, hide my portfolio.">Day trader</button>
+          <button type="button" class="chip" data-p="Long-term investor — portfolio first, then a clean chart.">Long-term</button>
+          <button type="button" class="chip" data-p="Keep it minimal — just the chart and my watchlist.">Minimal</button>
+        </div>
+        <button type="button" class="primary-btn lay-wide" id="layAiGo">Design my dashboard</button>
+        <div class="lay-ai-note small" id="layAiNote" hidden></div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="settingsDialog" class="form-dialog settings-dialog">
+    <header>
+      <h3>Settings</h3>
+      <button class="iconbtn" id="closeSettings" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="form-body">
+      <div class="setting-group">
+        <div class="setting-label">Assistant</div>
+        <div class="addon-row" id="aiControlRow">
+          <div class="addon-main">
+            <span class="addon-name">Let the assistant control my dashboard</span>
+            <span class="addon-desc muted small">With your OpenAI key, FAAM can open stocks and fill order tickets from your chat. It never places trades or moves money.</span>
+          </div>
+          <button type="button" class="addon-toggle" id="aiControlToggle" role="switch" aria-checked="false" aria-label="Toggle assistant control"><span class="addon-knob"></span></button>
+        </div>
+      </div>
+      <div class="setting-group">
+        <div class="setting-label">Modes</div>
+        <div class="addon-row" id="beginnerRow">
+          <div class="addon-main">
+            <span class="addon-name">Beginner mode</span>
+            <span class="addon-desc muted small">A friendly guided tour and plain-language tips across the app.</span>
+          </div>
+          <button type="button" class="addon-toggle" id="beginnerToggle" role="switch" aria-checked="false" aria-label="Toggle beginner mode"><span class="addon-knob"></span></button>
+        </div>
+        <div class="addon-row" id="gameRow">
+          <div class="addon-main">
+            <span class="addon-name">Game of Stocks</span>
+            <span class="addon-desc muted small">Earn tokens, build streaks, and climb the leaderboard.</span>
+          </div>
+          <button type="button" class="addon-toggle" id="gameToggle" role="switch" aria-checked="false" aria-label="Toggle Game of Stocks"><span class="addon-knob"></span></button>
+        </div>
+      </div>
+      <div class="setting-group">
+        <div class="setting-label">Forecast model</div>
+        <p class="muted small" style="margin:0 0 10px">Apollo is fast and free. Artemis runs a Monte Carlo simulation and reads live news (uses AI).</p>
+        <div class="model-choices" id="modelChoices"></div>
+      </div>
+      <div class="setting-group">
+        <div class="setting-label">Add-ons</div>
+        <div class="addon-row" id="predMarketsRow">
+          <div class="addon-main">
+            <span class="addon-name">Prediction markets</span>
+            <span class="addon-desc muted small">Model-implied odds on price moves. Max &amp; Elite.</span>
+          </div>
+          <button type="button" class="addon-toggle" id="predMarketsToggle" role="switch" aria-checked="false" aria-label="Toggle prediction markets"><span class="addon-knob"></span></button>
+        </div>
+      </div>
+      <div class="setting-group">
+        <div class="setting-label">Portfolio focus</div>
+        <p class="muted small" style="margin:0 0 10px">Rate what you want your portfolio in. FAAM tailors your watchlist and ideas to match.</p>
+        <div class="interest-grid" id="interestGridSettings"></div>
+        <button type="button" class="ghostbtn" id="interestApply" style="margin-top:12px;width:100%">Add suggested tickers to my watchlist</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- AI control consent: the assistant asks before it drives the dashboard -->
+  <dialog id="aiControlDialog" class="form-dialog ai-consent-dialog">
+    <div class="ai-consent">
+      <div class="ai-consent-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="26" height="26"><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M12 3l1.9 4.6L18.5 9l-3.4 3 1 4.8L12 14.6 7.9 16.8l1-4.8L5.5 9l4.6-1.4z"/></svg>
+      </div>
+      <h3>Let FAAM control your dashboard?</h3>
+      <p class="ai-consent-lead">The assistant can open the right stock and <strong>fill in an order ticket</strong> for you from a plain-English request like “buy $500 of Apple.”</p>
+      <ul class="ai-consent-points">
+        <li><span class="ic ok">✓</span> It only navigates and fills the ticket</li>
+        <li><span class="ic ok">✓</span> Uses your OpenAI key, on this device only</li>
+        <li><span class="ic no">✕</span> Never places a trade or moves money — you always review &amp; submit</li>
+      </ul>
+      <div class="ai-consent-actions">
+        <button type="button" class="ghostbtn" id="aiControlDeny">Not now</button>
+        <button type="button" class="primary-btn" id="aiControlAllow">Allow</button>
+      </div>
+      <p class="ai-consent-foot muted small">You can turn this off anytime in Settings.</p>
+    </div>
+  </dialog>
+
+  <!-- First-run onboarding: FAAM Assistant asks what to focus the portfolio on -->
+  <dialog id="onboardDialog" class="chat-dialog onboard-dialog">
+    <header>
+      <div class="onboard-id">
+        <span class="onboard-avatar" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="#fff" d="M3 21V3h2v14l5-7 4 5 7-10v16H3z"/></svg>
+        </span>
+        <div class="onboard-head-text">
+          <h3>FAAM Assistant</h3>
+          <span class="onboard-sub">Let's set up your portfolio</span>
+        </div>
+      </div>
+      <button class="iconbtn" id="onboardSkipX" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="onboard-body">
+      <div class="msg ai onboard-greet">Hi — I'm your FAAM Assistant. Where do you want your portfolio to be? Rate each area from 1 to 5 stars and I'll tailor your watchlist, ideas, and forecasts to match. Skip anything you're not into.</div>
+      <div class="interest-grid" id="interestGridOnboard"></div>
+    </div>
+    <footer class="onboard-foot">
+      <button type="button" class="ghostbtn" id="onboardSkip">Skip for now</button>
+      <button type="button" class="primary-btn" id="onboardBuild">Build my portfolio</button>
+    </footer>
+  </dialog>
+
+  <!-- Game of Stocks -->
+  <dialog id="gameDialog" class="game-dialog">
+    <div class="game-aurora" aria-hidden="true"></div>
+    <canvas id="confettiCanvas" class="confetti-canvas" aria-hidden="true"></canvas>
+    <header class="game-head">
+      <div class="game-title">
+        <span class="game-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#fff" d="M7 7h10a5 5 0 0 1 5 5 4 4 0 0 1-7 3l-1-1H10l-1 1a4 4 0 0 1-7-3 5 5 0 0 1 5-5zm0 3v1.5H5.5V13H7v1.5h1.5V13H10v-1.5H8.5V10H7zm9 .25a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm2 2.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>
+        </span>
+        <span>Game of Stocks</span>
+      </div>
+      <button class="iconbtn game-x" id="closeGame" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="game-body">
+      <section class="g-hero">
+        <div class="g-balance">
+          <span class="g-coin" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="34" height="34"><circle cx="12" cy="12" r="11" fill="#ffd66e"/><circle cx="12" cy="12" r="8.4" fill="none" stroke="#caa024" stroke-width="1.4"/><path fill="#b8881a" d="M13 7h-1.8v1.3h-1.4a2 2 0 0 0 0 4h2.4a.55.55 0 0 1 0 1.1H8.8v1.3h2.4V17H13v-1.3h.2a2 2 0 0 0 0-4h-2.4a.55.55 0 0 1 0-1.1h3.4V9.3H13z"/></svg>
+          </span>
+          <div class="g-balance-num"><span id="gTokens">0</span><span class="g-balance-lbl">tokens</span></div>
+        </div>
+        <div class="g-level">
+          <div class="g-level-row"><b id="gLevel">Level 1</b><span class="muted small" id="gLevelMeta">0 / 200</span></div>
+          <div class="g-bar"><span class="g-bar-fill" id="gBarFill"></span></div>
+          <div class="g-rank"><span class="muted small">Rank</span> <b id="gRank">—</b> <span class="muted small" id="gPlayers"></span></div>
+        </div>
+      </section>
+
+      <section class="g-cards">
+        <div class="g-card g-daily" id="gDailyCard">
+          <div class="g-card-h"><span class="g-gift" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 8h-2.1a3 3 0 0 0-4.9-3.3L12 5.5l-1-.8A3 3 0 0 0 6.1 8H4a1 1 0 0 0-1 1v3h2v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7h2V9a1 1 0 0 0-1-1zm-5.5-2a1 1 0 1 1 .9 1.5L13 8V6.7a1 1 0 0 1 1.5-.7zM8.6 5.5A1 1 0 0 1 11 6.7V8l-1.4-.5A1 1 0 0 1 8.6 5.5zM11 19H7v-7h4v7zm6 0h-4v-7h4v7z"/></svg>
+          </span> Daily reward</div>
+          <button class="g-claim" id="claimBtn" type="button">Claim</button>
+          <p class="g-claim-note muted small" id="claimNote"></p>
+        </div>
+        <div class="g-card g-streak">
+          <div class="g-card-h"><span class="g-flame" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2s5 4 5 9a5 5 0 0 1-10 0c0-1.5.6-2.7 1.3-3.6C8.7 8.5 9 10 10 10c.9 0 1-1.2.5-2.5C9.8 5.6 12 4 12 2z"/></svg>
+          </span> Streak</div>
+          <div class="g-streak-num"><span id="gStreak">0</span><span class="g-streak-unit">days</span></div>
+          <p class="muted small">Best streak <b id="gBest">0</b></p>
+        </div>
+      </section>
+
+      <section class="g-board">
+        <div class="g-card-h"><span class="g-trophy" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 4h10v2h3v2a4 4 0 0 1-4 4 5 5 0 0 1-2 1.7V17h2.5a1.5 1.5 0 0 1 1.5 1.5V20H6v-1.5A1.5 1.5 0 0 1 7.5 17H10v-3.3A5 5 0 0 1 8 12a4 4 0 0 1-4-4V6h3V4zM6 8a2 2 0 0 0 1 1.7V8H6zm12 0v1.7A2 2 0 0 0 18 8z"/></svg>
+        </span> Leaderboard</div>
+        <ol class="g-lb" id="gLeaderboard"></ol>
+      </section>
+
+      <section class="g-missions">
+        <div class="g-card-h">Ways to earn</div>
+        <ul class="g-missions-list">
+          <li><span class="g-mreward">+50</span> Claim your daily reward</li>
+          <li><span class="g-mreward">+15/day</span> Keep your streak alive</li>
+          <li><span class="g-mreward">soon</span> Predict a stock's direction and nail it</li>
+        </ul>
+      </section>
+    </div>
+  </dialog>
+
+  <!-- Beginner mode coach / guided tour -->
+  <dialog id="coachDialog" class="coach-dialog">
+    <button class="iconbtn coach-x" id="coachClose" aria-label="Close">
+      <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="coach-art" id="coachArt" aria-hidden="true"></div>
+    <div class="coach-step">
+      <span class="coach-kicker" id="coachKicker">Beginner mode</span>
+      <h3 id="coachTitle"></h3>
+      <p id="coachText"></p>
+    </div>
+    <div class="coach-foot">
+      <div class="coach-dots" id="coachDots"></div>
+      <div class="coach-nav">
+        <button type="button" class="ghostbtn" id="coachPrev">Back</button>
+        <button type="button" class="primary-btn" id="coachNext">Next</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="toastDialog" class="toast"></dialog>
+</body>
+</html>

@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FAAM · Sign in</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://rsms.me" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <style>
+    :root{
+      --bg:#F7F8FA; --panel:#fff; --border:#E4E7EC; --border-strong:#D0D5DD;
+      --text:#0B1220; --text-2:#344054; --muted:#667085; --accent:#2E64F0; --accent-2:#6E56CF;
+      --red:#B42318; --red-soft:#FEF3F2;
+      --shadow:0 16px 40px -12px rgba(16,24,40,.18);
+    }
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:
+      radial-gradient(900px 500px at 80% -10%,rgba(110,86,207,.10),transparent 60%),
+      radial-gradient(800px 480px at -10% 20%,rgba(46,100,240,.10),transparent 55%),var(--bg);
+      font-family:'Inter',-apple-system,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased}
+    .card{width:min(400px,92vw);background:var(--panel);border:1px solid var(--border);border-radius:18px;
+      box-shadow:var(--shadow);padding:30px 28px}
+    .brand{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:6px}
+    .logo-mark{width:34px;height:34px;border-radius:9px;background:var(--panel);border:1px solid var(--border);display:grid;place-items:center}
+    .logo{font-weight:800;letter-spacing:.14em;font-size:16px}
+    .sub{text-align:center;color:var(--muted);font-size:13px;margin:0 0 20px}
+    h1{font-size:20px;font-weight:800;text-align:center;margin:0 0 18px;letter-spacing:-.01em}
+    .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;height:44px;border-radius:10px;
+      border:1px solid var(--border-strong);background:#fff;color:var(--text);font-weight:600;font-size:14px;cursor:pointer;text-decoration:none;transition:background .15s}
+    .gbtn:hover{background:#F1F3F7}
+    .divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;margin:16px 0}
+    .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border)}
+    label{display:block;font-size:12px;font-weight:600;color:var(--text-2);margin:0 0 6px}
+    input{width:100%;height:42px;border:1px solid var(--border);border-radius:9px;padding:0 12px;font-size:14px;font-family:inherit;background:#fff;color:var(--text);margin-bottom:13px}
+    input:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px rgba(46,100,240,.14)}
+    .submit{width:100%;height:44px;border:0;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;font-weight:700;font-size:14px;cursor:pointer}
+    .submit:hover{filter:brightness(1.06)}
+    .err{color:var(--red);background:var(--red-soft);border:1px solid rgba(180,35,24,.2);border-radius:8px;padding:8px 11px;font-size:12.5px;margin-bottom:12px;display:none}
+    .err.show{display:block}
+    .toggle{text-align:center;font-size:13px;color:var(--muted);margin-top:16px}
+    .toggle a{color:var(--accent);font-weight:600;cursor:pointer;text-decoration:none}
+    .hide{display:none}
+    .foot{text-align:center;color:var(--muted);font-size:11px;margin-top:14px}
+    .foot a{color:var(--accent);text-decoration:none;font-weight:600}
+    .foot a:hover{text-decoration:underline}
+
+    /* Human verification ("I'm not a robot") */
+    .robot{border:1px solid var(--border-strong);border-radius:12px;padding:12px 14px;margin:2px 0 14px;background:#fff;transition:border-color .15s,box-shadow .15s}
+    .robot.bad{border-color:rgba(180,35,24,.55);box-shadow:0 0 0 3px var(--red-soft)}
+    .robot-row{display:flex;align-items:center;gap:12px}
+    .robot-box{position:relative;width:26px;height:26px;border:2px solid var(--border-strong);border-radius:6px;background:#fff;cursor:pointer;flex:none;padding:0;display:grid;place-items:center}
+    .robot-box .robot-tick{opacity:0;transform:scale(.6);transition:opacity .15s,transform .15s;display:grid;place-items:center;width:100%;height:100%;border-radius:4px;background:var(--accent)}
+    .robot-box.on{border-color:var(--accent)}
+    .robot-box.on .robot-tick{opacity:1;transform:scale(1)}
+    .robot-box .robot-spin{position:absolute;inset:2px;border-radius:50%;border:2px solid var(--border);border-top-color:var(--accent);animation:spin .7s linear infinite;display:none}
+    .robot-box.loading .robot-spin{display:block}
+    .robot-box.loading{border-color:var(--accent)}
+    .robot-label{font-size:14px;font-weight:600;color:var(--text-2);flex:1;cursor:pointer;user-select:none}
+    .robot-badge{display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--muted);font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;text-align:center;line-height:1.05}
+    .robot-badge svg{opacity:.85}
+    .robot-challenge{margin-top:12px;border-top:1px dashed var(--border);padding-top:12px}
+    .robot-img{display:grid;place-items:center;margin-bottom:10px;min-height:70px}
+    .robot-img svg{max-width:100%;height:auto;border-radius:10px}
+    .robot-actions{display:flex;gap:8px;align-items:center}
+    .robot-actions input{margin:0;flex:1;text-transform:uppercase;letter-spacing:.22em;font-weight:700;text-align:center}
+    .robot-refresh{flex:none;width:42px;height:42px;border:1px solid var(--border-strong);border-radius:9px;background:#fff;color:var(--text-2);font-size:17px;cursor:pointer;line-height:1}
+    .robot-refresh:hover{background:#F1F3F7}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @media (prefers-reduced-motion:reduce){.robot-box .robot-spin{animation:none}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">
+      <span class="logo-mark">
+        <svg viewBox="0 0 24 24" width="20" height="20"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#4f8cff"/><stop offset="100%" stop-color="#7c5cff"/></linearGradient></defs><path fill="url(#g)" d="M3 21V3h2v14l5-7 4 5 7-10v16H3z"/></svg>
+      </span>
+      <span class="logo">FAAM</span>
+    </div>
+    <p class="sub">Financial AI Agent Manager</p>
+
+    <h1 id="title">Welcome back</h1>
+
+    <a class="gbtn" id="googleBtn" href="/auth/google/start">
+      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22 22-9.8 22-22c0-1.5-.2-2.6-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16 19 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 4.1 29.6 2 24 2 16 2 9.1 6.5 6.3 14.7z"/><path fill="#4CAF50" d="M24 46c5.5 0 10.5-2.1 14.3-5.6l-6.6-5.6C29.6 36.5 26.9 37.5 24 37.5c-5.2 0-9.6-3.3-11.2-7.9l-6.6 5.1C9 41.4 15.9 46 24 46z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.4l6.6 5.6C41.9 35.6 46 30.3 46 24c0-1.5-.2-2.6-.4-3.5z"/></svg>
+      Continue with Google
+    </a>
+
+    <div class="divider">or</div>
+
+    <div class="err" id="err"></div>
+
+    <form id="form" autocomplete="off">
+      <div id="emailRow" class="hide">
+        <label for="email">Email (optional)</label>
+        <input id="email" type="email" placeholder="you@example.com" />
+      </div>
+      <label for="username">Username</label>
+      <input id="username" type="text" placeholder="username" autocomplete="username" />
+      <label for="password">Password</label>
+      <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" />
+
+      <div class="robot hide" id="robot">
+        <div class="robot-row">
+          <button type="button" class="robot-box" id="robotBox" role="checkbox" aria-checked="false" aria-label="I'm not a robot">
+            <span class="robot-tick"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg></span>
+            <span class="robot-spin"></span>
+          </button>
+          <span class="robot-label" id="robotLabel">I'm not a robot</span>
+          <span class="robot-badge" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M12 3l7 3v5c0 4.4-3 8.3-7 9.5C8 19.3 5 15.4 5 11V6l7-3z"/></svg>
+            FAAM<br>Verify
+          </span>
+        </div>
+        <div class="robot-challenge hide" id="robotChallenge">
+          <div class="robot-img" id="captchaImg"></div>
+          <div class="robot-actions">
+            <input id="captchaAnswer" type="text" inputmode="text" autocomplete="off" maxlength="5" placeholder="Type the characters" aria-label="Type the characters shown" />
+            <button type="button" class="robot-refresh" id="captchaRefresh" title="New challenge" aria-label="New challenge">&#8635;</button>
+          </div>
+        </div>
+      </div>
+
+      <button class="submit" id="submit" type="submit">Sign in</button>
+    </form>
+
+    <div class="toggle" id="toggle">
+      New here? <a id="toggleLink">Create an account</a>
+    </div>
+    <div class="foot"><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · Not financial advice.</div>
+  </div>
+
+  <script>
+    let mode = "login";
+    const $ = (s) => document.querySelector(s);
+    const CAPTCHA_LEN = 5;
+
+    // ----- Human verification ("are you a robot?") -----
+    const captcha = { id: null, loaded: false, required: false };
+    function showErr(m) { const e = $("#err"); e.textContent = m; e.classList.add("show"); }
+
+    async function loadCaptcha(focus) {
+      const box = $("#robotBox");
+      box.classList.add("loading"); box.classList.remove("on");
+      $("#captchaAnswer").value = "";
+      captcha.loaded = false; captcha.id = null;
+      try {
+        const r = await fetch("/api/captcha", { cache: "no-store" });
+        const d = await r.json();
+        captcha.id = d.id; captcha.loaded = true;
+        $("#captchaImg").innerHTML = d.svg;
+        $("#robotChallenge").classList.remove("hide");
+        if (focus) $("#captchaAnswer").focus();
+      } catch (e) {
+        $("#captchaImg").textContent = "Couldn't load the challenge — tap ↻ to retry.";
+        $("#robotChallenge").classList.remove("hide");
+      } finally {
+        box.classList.remove("loading");
+      }
+    }
+    function showRobot(required) {
+      captcha.required = !!required;
+      $("#robot").classList.remove("hide");
+      if (!captcha.loaded) loadCaptcha(false);
+    }
+    function resetRobot() {
+      Object.assign(captcha, { id: null, loaded: false, required: false });
+      $("#captchaImg").innerHTML = "";
+      $("#captchaAnswer").value = "";
+      $("#robotChallenge").classList.add("hide");
+      $("#robotBox").classList.remove("on", "loading");
+      $("#robot").classList.remove("bad");
+    }
+    $("#robotBox").addEventListener("click", () => {
+      if (!captcha.loaded) loadCaptcha(true); else $("#captchaAnswer").focus();
+    });
+    $("#robotLabel").addEventListener("click", () => $("#robotBox").click());
+    $("#captchaRefresh").addEventListener("click", () => loadCaptcha(true));
+    $("#captchaAnswer").addEventListener("input", () => {
+      const v = $("#captchaAnswer").value.trim();
+      $("#robotBox").classList.toggle("on", v.length >= CAPTCHA_LEN);
+      $("#robot").classList.remove("bad");
+    });
+
+    function setMode(m) {
+      mode = m;
+      $("#title").textContent = m === "login" ? "Welcome back" : "Create your account";
+      $("#submit").textContent = m === "login" ? "Sign in" : "Sign up";
+      $("#emailRow").classList.toggle("hide", m !== "signup");
+      $("#password").autocomplete = m === "login" ? "current-password" : "new-password";
+      $("#toggle").innerHTML = m === "login"
+        ? 'New here? <a id="toggleLink">Create an account</a>'
+        : 'Have an account? <a id="toggleLink">Sign in</a>';
+      $("#toggleLink").addEventListener("click", () => setMode(m === "login" ? "signup" : "login"));
+      $("#err").classList.remove("show");
+      // Signup always shows the human check; login adds it only if the server asks.
+      if (m === "signup") { showRobot(true); }
+      else { $("#robot").classList.add("hide"); resetRobot(); }
+    }
+    $("#toggleLink").addEventListener("click", () => setMode("signup"));
+
+    // Google redirect messages
+    const g = new URLSearchParams(location.search).get("g");
+    if (g) {
+      const e = $("#err"); e.classList.add("show");
+      e.textContent = g === "unconfigured"
+        ? "Google sign-in isn't set up yet. Use a username/password, or configure Google in ~/.faam/google_oauth.json."
+        : "Google sign-in failed. Try again or use a username/password.";
+    }
+
+    $("#form").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      $("#err").classList.remove("show");
+      const username = $("#username").value.trim();
+      const password = $("#password").value;
+      const email = $("#email").value.trim();
+      if (!username || !password) { showErr("Enter a username and password."); return; }
+
+      const answer = $("#captchaAnswer").value.trim();
+      // New accounts must clear the human check before we even ask the server.
+      if (mode === "signup" && (!captcha.id || answer.length < CAPTCHA_LEN)) {
+        showRobot(true);
+        $("#robot").classList.add("bad");
+        $("#captchaAnswer").focus();
+        showErr("Please complete the human verification.");
+        return;
+      }
+
+      const payload = { username, password, email };
+      if (captcha.id && answer) { payload.captcha_id = captcha.id; payload.captcha_answer = answer; }
+
+      const btn = $("#submit"); const label = btn.textContent;
+      btn.disabled = true; btn.textContent = "Checking…";
+      try {
+        const r = await fetch(mode === "login" ? "/api/login" : "/api/signup", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const d = await r.json();
+        if (r.ok && !d.error) { location.href = "/dashboard"; return; }
+
+        if (d.captcha_required) {
+          // The pause: reveal the robot test (or a fresh one if it was consumed).
+          showRobot(true);
+          await loadCaptcha(true);
+          $("#robot").classList.add("bad");
+          showErr(answer ? "That didn't match — try the new challenge." : "Verify you're human to continue.");
+        } else {
+          // Other error (wrong password, taken name…). Any challenge we sent is
+          // now used up, so refresh it for the next attempt.
+          if (captcha.required || mode === "signup") await loadCaptcha(false);
+          showErr(d.error || "Something went wrong.");
+        }
+      } catch (e) {
+        showErr("Network error. Try again.");
+      } finally {
+        btn.disabled = false; btn.textContent = label;
+      }
+    });
+
+    // Land directly on the sign-up form when arriving at /signup.
+    if (location.pathname === "/signup") setMode("signup");
+  </script>
+</body>
+</html>

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FAAM · Page not found</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://rsms.me" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <style>
+    :root {
+      --bg: #0A0E16;
+      --text: #FFFFFF;
+      --muted: #C2CBD9;
+      --accent: #4f8cff;
+      --accent-2: #7c5cff;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center;
+      padding: 48px 24px;
+      overflow-x: hidden;
+      position: relative;
+    }
+    /* Soft brand glow, top-right — matches FAAM's dark aesthetic. */
+    body::before {
+      content: ""; position: fixed; inset: 0; pointer-events: none;
+      background: radial-gradient(60% 50% at 82% 0%, rgba(79,140,255,0.16), rgba(0,0,0,0) 70%);
+    }
+    .wrap { position: relative; width: 100%; max-width: 1100px; }
+    h1 {
+      font-weight: 800;
+      font-size: clamp(34px, 7vw, 96px);
+      line-height: 1.05;
+      letter-spacing: -0.01em;
+      margin-bottom: clamp(18px, 3vw, 36px);
+    }
+    .sub {
+      font-weight: 700;
+      font-size: clamp(16px, 2.4vw, 34px);
+      color: var(--text);
+      margin-bottom: clamp(28px, 5vw, 56px);
+    }
+    .mark { display: block; margin: 0 auto; width: clamp(120px, 18vw, 260px); height: auto; }
+    .actions { margin-top: clamp(28px, 5vw, 56px); display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 15px; font-weight: 700; text-decoration: none;
+      padding: 12px 22px; border-radius: 12px;
+      color: #fff;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      box-shadow: 0 8px 24px -8px rgba(79,140,255,0.6);
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 12px 30px -8px rgba(124,92,255,0.6); }
+    .btn.ghost {
+      background: transparent; color: var(--muted);
+      border: 1px solid rgba(255,255,255,0.14); box-shadow: none;
+    }
+    .btn.ghost:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>The Page You Were Looking For Is Not Living&nbsp;[ERROR&nbsp;404]</h1>
+    <p class="sub">The Page Could Have Been Moved, Deleted, or Just Not A Thing</p>
+
+    <!-- FAAM logo mark — blue → purple gradient -->
+    <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
+      <defs>
+        <linearGradient id="faam404" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#4f8cff"/>
+          <stop offset="100%" stop-color="#7c5cff"/>
+        </linearGradient>
+      </defs>
+      <path fill="url(#faam404)" d="M3 21V3h2v14l5-7 4 5 7-10v16H3z"/>
+    </svg>
+
+    <div class="actions">
+      <a class="btn" href="/dashboard">← Back to FAAM</a>
+      <a class="btn ghost" href="/login">Sign in</a>
+    </div>
+  </div>
+</body>
+</html>
