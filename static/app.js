@@ -129,7 +129,53 @@ async function initVersion() {
   try {
     const d = await (await fetch("/api/version", { cache: "no-store" })).json();
     _appVersion = d.version || null;
+    markWhatsNew(d.release);
   } catch (e) { /* offline — try again on the next check */ }
+}
+
+/* ---------- What's new (changelog + roadmap) ---------- */
+const CL_TAG = { new: "New", improved: "Improved", fixed: "Fixed" };
+
+function markWhatsNew(release) {
+  const dot = $("#whatsNewDot");
+  if (!dot) return;
+  let seen = null;
+  try { seen = localStorage.getItem("faam-changelog-seen"); } catch (e) {}
+  dot.hidden = !(release && release !== seen);   // show a dot when there's an unseen release
+}
+
+async function openChangelog() {
+  const dot = $("#whatsNewDot"); if (dot) dot.hidden = true;
+  const list = $("#changelogList"), coming = $("#changelogComing");
+  list.innerHTML = '<p class="muted small">Loading…</p>'; coming.innerHTML = "";
+  openDialog("changelogDialog");
+  try {
+    const d = await (await fetch("/api/changelog", { cache: "no-store" })).json();
+    try { if (d.version) localStorage.setItem("faam-changelog-seen", d.version); } catch (e) {}
+    renderChangelog(d);
+  } catch (e) {
+    list.innerHTML = '<p class="muted small">Couldn\'t load updates right now.</p>';
+  }
+}
+
+function renderChangelog(d) {
+  $("#changelogList").innerHTML = (d.releases || []).map((r) => `
+    <div class="cl-release">
+      <div class="cl-rhead">
+        <span class="cl-ver">v${escapeHtml(r.version)}</span>
+        <span class="cl-title">${escapeHtml(r.title || "")}</span>
+        <span class="cl-date muted small">${escapeHtml(r.date || "")}</span>
+      </div>
+      <ul class="cl-items">
+        ${(r.items || []).map((it) => `<li><span class="cl-tag cl-${escapeHtml(it.tag || "new")}">${CL_TAG[it.tag] || "New"}</span><span>${escapeHtml(it.text || "")}</span></li>`).join("")}
+      </ul>
+    </div>`).join("");
+  const items = d.coming || [];
+  $("#changelogComing").innerHTML = items.length ? `
+    <div class="cl-coming-head">Coming soon</div>
+    <div class="cl-roadmap">
+      ${items.map((c) => `<div class="cl-road"><span class="cl-road-dot" aria-hidden="true"></span><div><div class="cl-road-t">${escapeHtml(c.title || "")}</div><div class="cl-road-d muted small">${escapeHtml(c.text || "")}</div></div></div>`).join("")}
+    </div>` : "";
 }
 
 async function checkForUpdate() {
@@ -2830,6 +2876,10 @@ function wire() {
     btn.disabled = false; btn.textContent = old;
     toast(added.length ? `Added ${added.length} tickers to your watchlist.` : "Those are already on your watchlist.");
   });
+
+  // What's new (changelog + roadmap)
+  $("#whatsNewBtn").addEventListener("click", openChangelog);
+  $("#closeChangelog").addEventListener("click", () => $("#changelogDialog").close());
 
   // Customize dashboard (Default · Build your own · AI design)
   $("#layoutBtn").addEventListener("click", openLayout);

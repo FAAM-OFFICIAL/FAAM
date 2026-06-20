@@ -14,6 +14,21 @@
 </head>
 <body>
 
+  <!-- Auto-update overlay: shows when a newer build is deployed, then reloads -->
+  <div id="siteUpdating" class="site-updating" hidden>
+    <div class="su-inner">
+      <span class="su-mark" aria-hidden="true">
+        <span class="su-ring"></span>
+        <svg viewBox="0 0 24 24" width="38" height="38">
+          <defs><linearGradient id="suLg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#4f8cff"/><stop offset="100%" stop-color="#7c5cff"/></linearGradient></defs>
+          <path fill="url(#suLg)" d="M3 21V3h2v14l5-7 4 5 7-10v16H3z"/>
+        </svg>
+      </span>
+      <div class="su-title">FAAM is updating<span class="su-dots"><i>.</i><i>.</i><i>.</i></span></div>
+      <div class="su-sub">Loading the latest version — just a moment.</div>
+    </div>
+  </div>
+
   <!-- Ambient background -->
   <div class="bg" aria-hidden="true">
     <span class="orb o1"></span>
@@ -485,6 +500,39 @@
       }
       // In a normal browser, the target="_blank" link opens the app in a new tab.
     });
+  })();
+  </script>
+
+  <script>
+  /* Static auto-update: poll version.json (regenerated on every deploy). When it
+     changes, anyone with the page open sees "FAAM is updating…" and reloads to
+     the fresh build. Works on plain static hosting (Netlify) — no backend. */
+  (function () {
+    var loaded = null, updating = false;
+    function getVersion(cb) {
+      fetch("/version.json?t=" + Date.now(), { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+        .then(function (d) { cb(d && d.version != null ? String(d.version) : null); })
+        .catch(function () { cb(null); });
+    }
+    getVersion(function (v) { loaded = v; });
+    function check() {
+      if (updating || document.hidden) return;
+      getVersion(function (v) {
+        if (!loaded) { loaded = v; return; }
+        if (v && v !== loaded) showUpdate();
+      });
+    }
+    function showUpdate() {
+      updating = true;
+      var el = document.getElementById("siteUpdating");
+      if (!el) { location.reload(); return; }
+      el.hidden = false;
+      requestAnimationFrame(function () { el.classList.add("show"); });
+      setTimeout(function () { location.reload(); }, 2000);
+    }
+    setInterval(check, 60000);                 // check each minute
+    window.addEventListener("focus", check);   // and whenever the tab refocuses
   })();
   </script>
 

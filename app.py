@@ -61,6 +61,41 @@ def _compute_version() -> str:
 
 APP_VERSION = _compute_version()
 
+# Request-body caps so a malicious client can't exhaust memory with a huge body.
+MAX_BODY_BYTES = 2 * 1024 * 1024          # JSON request bodies (2 MB)
+MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25 MB)
+
+# What's-new feed: shown in-app, and the top version drives the "new" badge.
+# Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
+CHANGELOG = [
+    {"version": "1.4", "date": "2026-06-20", "title": "Always up to date", "items": [
+        {"tag": "new", "text": "Auto-updates — when a new FAAM ships, the app refreshes itself, no re-downloading."},
+        {"tag": "new", "text": "This What's-New panel, with a live roadmap of what's coming."},
+        {"tag": "improved", "text": "Security hardening across the backend (request limits, safer cookies & headers)."},
+    ]},
+    {"version": "1.3", "date": "2026-06-18", "title": "Make it yours", "items": [
+        {"tag": "new", "text": "Customizable dashboard — build your own layout or let GPT-4.1 mini design it."},
+        {"tag": "new", "text": "The assistant can fill in order tickets for you, with your permission."},
+        {"tag": "new", "text": "“Are you a robot?” verification on sign-up and sign-in."},
+    ]},
+    {"version": "1.2", "date": "2026-06-15", "title": "Learn & play", "items": [
+        {"tag": "new", "text": "Beginner mode — a guided tour and plain-language tips."},
+        {"tag": "new", "text": "Game of Stocks — tokens, streaks, daily rewards and a leaderboard."},
+        {"tag": "new", "text": "Windows & Linux downloads, plus a browser version."},
+    ]},
+    {"version": "1.1", "date": "2026-06-12", "title": "Sharper forecasts", "items": [
+        {"tag": "new", "text": "Onboarding that tailors your watchlist to what you care about."},
+        {"tag": "improved", "text": "A cleaner light theme across the whole dashboard."},
+    ]},
+]
+ROADMAP = [
+    {"title": "Juno", "text": "A deep model trained on historical stock data — in training now."},
+    {"title": "FAAM in the cloud", "text": "Use FAAM in any browser with nothing to install."},
+    {"title": "Price & news alerts", "text": "Get pinged when your stocks move or the story changes."},
+    {"title": "Mobile apps", "text": "FAAM for iOS and Android."},
+]
+CHANGELOG_VERSION = CHANGELOG[0]["version"] if CHANGELOG else ""
+
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.environ.get("FAAM_MODEL", "gpt-4.1-mini")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
@@ -184,10 +219,18 @@ def _load_json(path: Path, default):
     return default
 
 
+_DATA_LOCK = threading.Lock()
+
+
 def _save_json(path: Path, data) -> bool:
+    # Serialized + atomic (temp file → os.replace) so concurrent requests on the
+    # threaded server can't interleave writes and corrupt accounts/usage data.
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2))
+        with _DATA_LOCK:
+            tmp = path.with_name(path.name + f".tmp.{os.getpid()}.{threading.get_ident()}")
+            tmp.write_text(json.dumps(data, indent=2))
+            os.replace(tmp, path)
         return True
     except Exception:  # noqa: BLE001
         return False
@@ -551,11 +594,20 @@ def _extended_hours(meta: dict, state: str, price: float):
     return None, None, None, None
 
 
+_YH_RANGES = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"}
+_YH_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"}
+
+
 def yahoo_quote(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
     """Fetch quote + history from Yahoo Finance public chart API."""
+    # Allowlist range/interval so they can't inject extra query params upstream.
+    if range_ not in _YH_RANGES:
+        range_ = "1mo"
+    if interval not in _YH_INTERVALS:
+        interval = "1d"
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/"
-        f"{urllib.parse.quote(symbol)}?range={range_}&interval={interval}"
+        f"{urllib.parse.quote(symbol, safe='')}?range={range_}&interval={interval}"
         f"&includePrePost=true"
     )
     req = urllib.request.Request(
@@ -1677,6 +1729,13 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC), **kwargs)
 
+    # Defense-in-depth headers on every response (JSON, static, redirects).
+    def end_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        super().end_headers()
+
     def _json(self, obj, status: int = 200, set_cookie: str | None = None) -> None:
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)
@@ -1719,9 +1778,12 @@ class Handler(SimpleHTTPRequestHandler):
         return u
 
     def _session_cookie(self, token: str = "", clear: bool = False) -> str:
+        # Mark the cookie Secure on HTTPS deployments so it never travels over
+        # plain HTTP (localhost stays non-Secure so dev still works).
+        secure = "; Secure" if BASE_URL.startswith("https") else ""
         if clear:
-            return "faam_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax"
-        return f"faam_session={token}; HttpOnly; Path=/; Max-Age={SESSION_TTL}; SameSite=Lax"
+            return f"faam_session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax{secure}"
+        return f"faam_session={token}; HttpOnly; Path=/; Max-Age={SESSION_TTL}; SameSite=Lax{secure}"
 
     def _google_callback(self):
         qs = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
@@ -1768,10 +1830,16 @@ class Handler(SimpleHTTPRequestHandler):
         return self._redirect("/dashboard", set_cookie=self._session_cookie(token))
 
     def _read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
-        if not length:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
             return {}
-        return json.loads(self.rfile.read(length) or b"{}")
+        if length <= 0 or length > MAX_BODY_BYTES:   # reject empty / oversized bodies
+            return {}
+        try:
+            return json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return {}
 
     def _send_file(self, file_path: Path, content_type: str | None = None) -> None:
         if not file_path.exists():
@@ -2050,7 +2118,14 @@ NOT FINANCIAL ADVICE.
 
         if path == "/api/version":
             # Clients poll this; a changed value means a new build is live.
-            return self._json({"version": APP_VERSION})
+            return self._json({"version": APP_VERSION, "release": CHANGELOG_VERSION})
+
+        if path == "/api/changelog":
+            return self._json({
+                "version": CHANGELOG_VERSION,
+                "releases": CHANGELOG,
+                "coming": ROADMAP,
+            })
 
         if path == "/api/captcha":
             # A fresh human-verification challenge (id + distorted SVG).
@@ -2426,7 +2501,12 @@ NOT FINANCIAL ADVICE.
             return self._json(res, 200 if res.get("ok") else 400)
 
         if path == "/api/transcribe":
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                length = 0
+            if length > MAX_AUDIO_BYTES:
+                return self._json({"error": "audio too large"}, 413)
             audio = self.rfile.read(length) if length else b""
             if not audio:
                 return self._json({"error": "no audio data"}, 400)
