@@ -1646,6 +1646,99 @@ def dash_design_layout(prompt: str) -> dict:
     return out
 
 
+# ---------- AI trade ideas (strategist) ----------
+# Generates a few diverse, actionable ideas (long / short / pairs / hedge) from
+# the user's watchlist. GPT-4.1 mini when a key is set, heuristic otherwise.
+# Always informational only — FAAM never places trades.
+IDEA_TYPES = {"buy", "short", "pairs", "hedge", "swing", "watch"}
+
+
+def ideas_context(symbols: list) -> list:
+    """A compact live snapshot of the watchlist (symbol, name, %)."""
+    rows = []
+
+    def _one(s):
+        try:
+            q = yahoo_quote(s, range_="5d", interval="60m")
+            if q.get("error"):
+                return None
+            return {"symbol": q["symbol"], "name": q.get("name", s),
+                    "price": q.get("price") or 0.0, "pct": q.get("pct") or 0.0}
+        except Exception:  # noqa: BLE001
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        for r in ex.map(_one, (symbols or [])[:10]):
+            if r:
+                rows.append(r)
+    return rows
+
+
+def ideas_heuristic(rows: list) -> list:
+    """Key-free fallback: build sensible ideas from the watchlist's moves."""
+    if not rows:
+        return []
+    srt = sorted(rows, key=lambda r: r["pct"], reverse=True)
+    top, bottom = srt[0], srt[-1]
+    out = []
+    if top["pct"] > 0:
+        out.append({"type": "swing", "title": f"Momentum in {top['symbol']}", "tickers": [top["symbol"]],
+                    "thesis": f"{top['name']} is leading your watchlist today, up {top['pct']:.1f}%.",
+                    "action": "A momentum swing idea — enter on strength, stop below the recent low.",
+                    "risk": "Momentum reverses fast; size small and keep a stop.", "horizon": "days–weeks"})
+    if bottom["pct"] < 0:
+        out.append({"type": "short", "title": f"Weakness in {bottom['symbol']}", "tickers": [bottom["symbol"]],
+                    "thesis": f"{bottom['name']} is the laggard today, down {abs(bottom['pct']):.1f}%.",
+                    "action": "A short / put idea if the downtrend holds — or simply avoid adding here.",
+                    "risk": "Shorting has unlimited downside and squeezes are violent.", "horizon": "days"})
+    if len(srt) >= 2:
+        out.append({"type": "pairs", "title": f"Pairs: long {top['symbol']} / short {bottom['symbol']}",
+                    "tickers": [top["symbol"], bottom["symbol"]],
+                    "thesis": f"Long the strongest ({top['symbol']}) and short the weakest ({bottom['symbol']}) to bet on relative performance, not market direction.",
+                    "action": "Market-neutral pairs idea — balance the dollar amount on each leg.",
+                    "risk": "Both legs can move against you; correlations shift.", "horizon": "weeks"})
+    out.append({"type": "hedge", "title": "Hedge the broad market", "tickers": ["SPY"],
+                "thesis": "If your watchlist is mostly correlated, a small index short/put (e.g. SPY) cushions a pullback.",
+                "action": "Consider a modest SPY put or inverse position as insurance.",
+                "risk": "Hedges cost money in calm markets.", "horizon": "weeks"})
+    return out
+
+
+def generate_ideas(rows: list):
+    """Return (ideas, source). Uses GPT-4.1 mini when available."""
+    if OPENAI_API_KEY and rows:
+        snapshot = ", ".join(f"{r['symbol']} {r['pct']:+.1f}%" for r in rows)
+        ai = openai_chat(
+            [{"role": "user", "content":
+              f"My watchlist right now: {snapshot}. Generate 4 diverse, actionable trade IDEAS — "
+              "a mix of long, short, pairs and hedge (e.g. buy a strong name, short a weak one, a "
+              "market-neutral pairs trade, or hedge with an index short). "
+              'Reply with ONLY compact JSON: {"ideas":[{"type":"buy|short|pairs|hedge|swing|watch",'
+              '"title":"...","tickers":["..."],"thesis":"...","action":"...","risk":"...","horizon":"..."}]}'}],
+            system="You are a markets strategist writing concise, balanced trade ideas. Always include "
+                   "the risk, never guarantee outcomes, and keep each field short. JSON only, no prose.",
+        )
+        try:
+            j = json.loads(re.search(r"\{.*\}", extract_text(ai), re.S).group(0))
+            out = []
+            for it in (j.get("ideas") or [])[:6]:
+                t = str(it.get("type") or "watch").lower()
+                out.append({
+                    "type": t if t in IDEA_TYPES else "watch",
+                    "title": str(it.get("title") or "")[:120],
+                    "tickers": [str(x).upper()[:8] for x in (it.get("tickers") or []) if x][:3],
+                    "thesis": str(it.get("thesis") or "")[:400],
+                    "action": str(it.get("action") or "")[:280],
+                    "risk": str(it.get("risk") or "")[:280],
+                    "horizon": str(it.get("horizon") or "")[:40],
+                })
+            if out:
+                return out, "ai"
+        except Exception:  # noqa: BLE001
+            pass
+    return ideas_heuristic(rows), "heuristic"
+
+
 # ---------------------------------------------------------------------------
 # Human verification ("are you a robot?") — a self-contained, no-dependency
 # CAPTCHA. The server renders a short distorted-text challenge as SVG, keeps the
@@ -2596,6 +2689,20 @@ NOT FINANCIAL ADVICE.
             if err:
                 return self._json(err, 502)
             return self._json({"url": res.get("url")})
+
+        if path == "/api/ideas":
+            # AI trade ideas from the user's watchlist. Informational only — FAAM
+            # never places trades; ideas just pre-fill an order ticket to review.
+            if usage_blocked():
+                return self._json(USAGE_LIMIT_MSG, 402)
+            rows = ideas_context(load_watchlist())
+            ideas, source = generate_ideas(rows)
+            return self._json({
+                "ideas": ideas,
+                "source": source,
+                "disclaimer": "Ideas are AI-generated and informational only — not financial advice. "
+                              "FAAM never places trades; you review and decide.",
+            })
 
         if path == "/api/dashboard/layout":
             # Design a dashboard layout from a plain-English request (GPT-4.1 mini,
