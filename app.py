@@ -93,6 +93,7 @@ CHANGELOG = [
     ]},
 ]
 ROADMAP = [
+    {"title": "Mock Stock Trading", "text": "Learn to trade — practice with virtual money, risk-free."},
     {"title": "Juno", "text": "A deep model trained on historical stock data — in training now."},
     {"title": "FAAM in the cloud", "text": "Use FAAM in any browser with nothing to install."},
     {"title": "Price & news alerts", "text": "Get pinged when your stocks move or the story changes."},
