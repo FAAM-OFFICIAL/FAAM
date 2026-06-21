@@ -2137,6 +2137,7 @@ async function loadPro() {
     pro.configured = !!d.configured;
     pro.plans = d.plans || [];
     pro.features = d.features || {};
+    pro.beta = !!d.beta;           // beta: everything free & unlocked
   } catch (e) { /* leave defaults */ }
   // If the saved forecast model needs a higher tier than the user has, fall back.
   const cm = FORECAST_MODELS.find((m) => m.id === state.forecastModel);
@@ -2171,9 +2172,15 @@ function handleUsageLimit(data) {
 function renderProUI() {
   const pill = $("#proBtn");
   if (pill) {
-    pill.textContent = pro.tier > 0 ? (pro.planName || "Pro").toUpperCase() : "Upgrade";
-    pill.classList.toggle("is-pro", pro.tier > 0);
-    pill.title = pro.tier > 0 ? `You're on FAAM ${pro.planName}` : "Upgrade to FAAM Pro";
+    if (pro.beta) {
+      pill.textContent = "BETA · FREE";
+      pill.classList.add("is-pro", "is-beta");
+      pill.title = "FAAM is free while it's in beta — everything's unlocked";
+    } else {
+      pill.textContent = pro.tier > 0 ? (pro.planName || "Pro").toUpperCase() : "Upgrade";
+      pill.classList.toggle("is-pro", pro.tier > 0);
+      pill.title = pro.tier > 0 ? `You're on FAAM ${pro.planName}` : "Upgrade to FAAM Pro";
+    }
   }
   const lockBtn = (sel, feature) => {
     const el = $(sel);
@@ -2214,6 +2221,17 @@ function renderPlanCards() {
 
 function openProDialog() {
   $("#proErr").textContent = "";
+  // Beta: hide the paywall entirely and show a friendly "all free" message.
+  if (pro.beta) {
+    $("#proConnect").hidden = true;
+    $("#proPlans").style.display = "none";
+    const act = $("#proActive");
+    act.hidden = false;
+    act.innerHTML = "🎉 <strong>Everything's free while FAAM is in beta.</strong><br>" +
+      "Every model, forecast, and tool is unlocked — no upgrade needed.";
+    openDialog("proDialog");
+    return;
+  }
   $("#proConnect").hidden = pro.configured;
   $("#proPlans").style.display = pro.configured ? "grid" : "none";
   renderPlanCards();

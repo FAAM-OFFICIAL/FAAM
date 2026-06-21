@@ -1346,6 +1346,18 @@ body.beginner .beginner-banner.dismissed { display: none; }
   .updating-mark svg, .updating-ring { animation: none !important; }
 }
 
+/* ---------- Beta labeling ---------- */
+.brand-beta {
+  display: inline-block; font-size: 9px; font-weight: 800; letter-spacing: .07em;
+  color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border-radius: 5px; padding: 2px 5px; margin-left: 5px; vertical-align: middle;
+  position: relative; top: -1px;
+}
+.pro-pill.is-beta {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #fff; border-color: transparent; font-weight: 800; letter-spacing: .03em;
+}
+
 /* ---------- What's new (changelog + roadmap) ---------- */
 .whatsnew-btn { position: relative; }
 .whatsnew-dot {

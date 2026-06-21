@@ -68,6 +68,10 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # What's-new feed: shown in-app, and the top version drives the "new" badge.
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
+    {"version": "1.5", "date": "2026-06-20", "title": "Free for everyone — beta", "items": [
+        {"tag": "new", "text": "FAAM is in beta: every plan, model and tool is unlocked and free for everyone."},
+        {"tag": "improved", "text": "Billing is paused — no card needed. Paid plans return at launch."},
+    ]},
     {"version": "1.4", "date": "2026-06-20", "title": "Always up to date", "items": [
         {"tag": "new", "text": "Auto-updates — when a new FAAM ships, the app refreshes itself, no re-downloading."},
         {"tag": "new", "text": "This What's-New panel, with a live roadmap of what's coming."},
@@ -95,6 +99,11 @@ ROADMAP = [
     {"title": "Mobile apps", "text": "FAAM for iOS and Android."},
 ]
 CHANGELOG_VERSION = CHANGELOG[0]["version"] if CHANGELOG else ""
+
+# Beta: every feature is unlocked and free for everyone, and billing is paused.
+# The Stripe key & checkout code stay wired up (kept for launch) — they're just
+# not used while BETA is on. Set FAAM_BETA=0 to go paid.
+BETA = os.environ.get("FAAM_BETA", "1") != "0"
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.environ.get("FAAM_MODEL", "gpt-4.1-mini")
@@ -1774,7 +1783,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _apply_user_context(self):
         u = self._current_user()
-        _set_req(u["username"] if u else "anon", int((u or {}).get("tier") or 0))
+        # In beta everyone is effectively top-tier, so usage caps don't apply.
+        tier = 4 if BETA else int((u or {}).get("tier") or 0)
+        _set_req(u["username"] if u else "anon", tier)
         return u
 
     def _session_cookie(self, token: str = "", clear: bool = False) -> str:
@@ -2151,10 +2162,13 @@ NOT FINANCIAL ADVICE.
         if path == "/api/pro":
             u = user or {}
             plan = u.get("plan", "")
+            real_tier = int(u.get("tier") or 0)
             return self._json({
                 "plan": plan,
-                "tier": int(u.get("tier") or 0),
-                "planName": PLANS.get(plan, {}).get("name", ""),
+                "tier": 4 if BETA else real_tier,        # beta unlocks everything
+                "realTier": real_tier,
+                "beta": BETA,
+                "planName": "Beta — all access" if BETA else PLANS.get(plan, {}).get("name", ""),
                 "configured": bool(stripe_key()),
                 "plans": [{"id": k, **v} for k, v in PLANS.items()],
                 "features": FEATURE_MIN_TIER,
@@ -2555,6 +2569,10 @@ NOT FINANCIAL ADVICE.
             return self._json({"ok": ok, "configured": bool(stripe_key())})
 
         if path == "/api/checkout":
+            # Billing is paused during the beta — everything's free. (The Stripe
+            # code below stays intact for when we launch.)
+            if BETA:
+                return self._json({"error": "FAAM is free while it's in beta — every feature is already unlocked. 🎉"})
             # Creates a Stripe Checkout subscription session. FAAM never sees the
             # card; Stripe hosts the payment page. We only get back a URL to open.
             body = self._read_json()

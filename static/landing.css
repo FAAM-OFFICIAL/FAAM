@@ -63,6 +63,19 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   -webkit-mask-image: radial-gradient(ellipse 90% 60% at 50% 0%, #000 30%, transparent 75%);
 }
 
+/* ---------- Beta labeling ---------- */
+.brand-beta {
+  display: inline-block; font-size: 9px; font-weight: 800; letter-spacing: .07em;
+  color: #fff; background: var(--grad); border-radius: 5px; padding: 2px 5px;
+  margin-left: 5px; vertical-align: middle; position: relative; top: -2px;
+}
+.beta-banner {
+  margin: 18px auto 0; max-width: 560px; font-size: 13.5px; color: var(--text-2);
+  background: var(--accent-soft, #EEF4FF); border: 1px solid rgba(46,100,240,.22);
+  border-radius: 12px; padding: 10px 16px;
+}
+.price-amt .per s { color: var(--muted); opacity: .8; }
+
 /* ---------- Auto-update overlay ("FAAM is updating…") ---------- */
 .site-updating {
   position: fixed; inset: 0; z-index: 2000;
