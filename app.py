@@ -1303,19 +1303,66 @@ def _game_claim(username: str) -> dict:
 
 
 # ---------- Windows package (download) ----------
+# This launcher fixes the three things that used to make Windows "not work":
+#   1. The Microsoft Store python stub: `where python` finds a fake shim that
+#      just opens the Store, so `python app.py` did nothing. We probe py/python/
+#      python3 and only accept one that actually runs.
+#   2. The browser used to open BEFORE the server was listening -> "can't reach
+#      this page". We now wait for /api/health, then open the browser.
+#   3. It demanded an OpenAI key to start. The dashboard runs fine without one,
+#      so the key is now optional (only the AI assistant needs it).
 WIN_BAT = """@echo off
-cd /d \"%~dp0\"
-where python >nul 2>nul
-if errorlevel 1 (
-  echo Python 3 is required. Install it from https://www.python.org/downloads/ ^(tick \"Add Python to PATH\"^), then run this again.
+setlocal enabledelayedexpansion
+cd /d "%~dp0"
+title FAAM
+
+REM --- Find a Python that actually runs (skip the Microsoft Store stub) ---
+set "PYEXE="
+for %%P in (py python python3) do (
+  if not defined PYEXE (
+    %%P -c "import sys" >nul 2>nul && set "PYEXE=%%P"
+  )
+)
+if not defined PYEXE (
+  echo.
+  echo   Python 3 was not found.
+  echo   1^) Install it from https://www.python.org/downloads/
+  echo   2^) During setup, TICK "Add Python to PATH"
+  echo   3^) Then double-click this file again.
+  echo.
+  echo   Tip: if typing "python" opens the Microsoft Store, turn off the
+  echo   python alias in Settings ^> Manage App Execution Aliases.
+  echo.
   pause
   exit /b 1
 )
-if not defined OPENAI_API_KEY set /p OPENAI_API_KEY=\"Paste your OpenAI API key (sk-...): \"
+
+REM --- Optional OpenAI key (enables the AI assistant; app runs without it) ---
+set "FAAM_DIR=%USERPROFILE%\\.faam"
+set "FAAM_KEY=%FAAM_DIR%\\key"
+if not defined OPENAI_API_KEY if exist "%FAAM_KEY%" set /p OPENAI_API_KEY=<"%FAAM_KEY%"
+if not defined OPENAI_API_KEY (
+  echo.
+  echo   Optional: paste an OpenAI API key to switch on the AI assistant.
+  echo   Press Enter to skip - the dashboard works fully without it.
+  set /p OPENAI_API_KEY="OpenAI key (or blank): "
+)
+if defined OPENAI_API_KEY (
+  if not exist "%FAAM_DIR%" mkdir "%FAAM_DIR%" >nul 2>nul
+  >"%FAAM_KEY%" echo(!OPENAI_API_KEY!
+)
+
 echo.
-echo Starting FAAM at http://localhost:8765 ...
-start \"\" http://localhost:8765/login
-python app.py
+echo   Starting FAAM... your browser will open automatically in a moment.
+echo   Keep this window open while you use FAAM. Close it to quit.
+echo.
+
+REM --- Open the browser only once the server answers (runs in background) ---
+start "" /b powershell -NoProfile -WindowStyle Hidden -Command "$ErrorActionPreference='SilentlyContinue';for($i=0;$i -lt 90;$i++){try{$r=Invoke-WebRequest -UseBasicParsing 'http://localhost:8765/api/health' -TimeoutSec 1;if($r.StatusCode -eq 200){Start-Process 'http://localhost:8765/login';break}}catch{};Start-Sleep -Milliseconds 500}"
+
+%PYEXE% app.py
+echo.
+echo   FAAM has stopped.
 pause
 """
 
@@ -1324,16 +1371,27 @@ WIN_README = """FAAM for Windows
 
 QUICK START
 1) Install Python 3.9+ from https://www.python.org/downloads/
-   (tick "Add Python to PATH" during setup).
+   IMPORTANT: tick "Add Python to PATH" during setup.
 2) Double-click  Start FAAM.bat
-3) Paste your OpenAI API key when prompted.
-4) Your browser opens to FAAM — create an account or sign in, and you're in.
+3) Your browser opens to FAAM automatically once it's ready.
+   Create an account or sign in, and you're in.
 
-FAAM runs locally on your PC and you use it right in your browser.
+That's it - FAAM runs locally on your PC and you use it in your browser.
+You do NOT need an OpenAI key; add one only if you want the AI assistant
+(you can paste it when the launcher asks, or just press Enter to skip).
+
+TROUBLESHOOTING
+- "Nothing happens / it opens the Microsoft Store": Windows shipped a fake
+  "python" shortcut. Install Python from the link above (Add to PATH), or turn
+  off the alias in  Settings > Apps > Advanced app settings >
+  App execution aliases  (toggle off python.exe / python3.exe).
+- "The page won't load at first": give it a few seconds - the launcher waits
+  for the server and opens your browser when it's ready.
+- To stop FAAM: close the black launcher window.
 
 LINUX: grab the Linux package at /download/linux (or just run python3 app.py).
 
-NOT FINANCIAL ADVICE. FAAM never places trades — it prepares orders for you to review.
+NOT FINANCIAL ADVICE. FAAM never places trades - it prepares orders for you to review.
 """
 
 

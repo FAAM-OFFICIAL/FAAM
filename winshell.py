@@ -53,7 +53,8 @@ def prompt_key():
         root.withdraw()
         val = simpledialog.askstring(
             "Welcome to FAAM",
-            "Paste your OpenAI API key (sk-...).\n"
+            "Optional: paste your OpenAI API key (sk-...) to enable the AI "
+            "assistant.\nLeave blank to skip — the dashboard works without it.\n"
             "Stored only on this PC at %USERPROFILE%\\.faam\\key.",
             show="*",
         )
@@ -88,18 +89,23 @@ def wait_for_server():
 
 
 def main():
-    key = disk_key() or prompt_key()
+    # The key is OPTIONAL — the dashboard runs without it; only the AI assistant
+    # needs one. We try a saved/env key, then offer a one-time prompt, but we
+    # launch FAAM either way so the app never appears "broken" with no key.
+    key = disk_key()
     if not key:
-        return
-    try:
-        FAAM_DIR.mkdir(parents=True, exist_ok=True)
-        KEY_FILE.write_text(key, encoding="utf-8")
-    except Exception:
-        pass
+        key = prompt_key()
+    if key:
+        try:
+            FAAM_DIR.mkdir(parents=True, exist_ok=True)
+            KEY_FILE.write_text(key, encoding="utf-8")
+        except Exception:
+            pass
 
     # Configure the server BEFORE importing app (it reads env at import time).
     os.environ["FAAM_PORT"] = str(PORT)
-    os.environ["OPENAI_API_KEY"] = key
+    if key:
+        os.environ["OPENAI_API_KEY"] = key
     os.environ.setdefault("FAAM_ROOT", str(BASE))
     sys.path.insert(0, str(BASE))
 
