@@ -14,6 +14,9 @@ faam-*/
 
 # Built download bundles — the PRIVATE one has a baked-in key!
 *.zip
+# Exception: the public, key-free download bundles served by GitHub Pages.
+# (Verified to contain no API keys before committing.)
+!docs/*.zip
 FAAM.app/
 faamview            # compiled binary (ship a signed one separately)
 
