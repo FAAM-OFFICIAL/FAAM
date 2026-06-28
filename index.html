@@ -108,8 +108,8 @@
               <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M12 2.5c-2.4 0-3.6 1.9-3.6 4.2 0 1.6.4 2.4.4 3.6 0 1.4-2 3.3-2.8 5.4-.4 1-.1 2 .3 2.8.2.4.1.9-.3 1.2-.5.4-.4 1.1.3 1.3 1.6.4 3-.6 3.4-1.3.4.7 1.8 1.7 3.4 1.3.7-.2.8-.9.3-1.3-.4-.3-.5-.8-.3-1.2.4-.8.7-1.8.3-2.8-.8-2.1-2.8-4-2.8-5.4 0-1.2.4-2 .4-3.6 0-2.3-1.2-4.2-3.7-4.2zm-1.5 4.1a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zm3 0a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6zM12 9c.9 0 2 .6 2 1.1 0 .3-1.1.9-2 .9s-2-.6-2-.9c0-.5 1.1-1.1 2-1.1z"/></svg>
               <span>Linux</span>
             </a>
-            <a class="dl-os dl-browser" id="browserVersion" href="https://faam.onrender.com" target="_blank" rel="noopener"
-               title="Open the FAAM app in your web browser">
+            <a class="dl-os dl-browser" id="browserVersion" href="dashboard/" target="_blank" rel="noopener"
+               title="Open the free FAAM dashboard in your web browser">
               <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
                 <path fill="none" stroke="currentColor" stroke-width="2" d="M3 12h18M12 3c2.6 2.7 2.6 15.3 0 18M12 3c-2.6 2.7-2.6 15.3 0 18"/>
@@ -459,24 +459,8 @@
   (function () {
     var link = document.getElementById("browserVersion");
     if (!link) return;
-    // Where the hosted FAAM app lives (Render). Change this if your URL differs.
-    var FAAM_HOSTED = "https://faam.onrender.com";
-    var appUrl = location.origin + "/browserversion";   // assume the app is on this origin
-    link.setAttribute("href", appUrl);
-
-    // Confirm this origin actually runs FAAM; otherwise use the hosted app.
-    try {
-      fetch("/api/health", { cache: "no-store" })
-        .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
-        .then(function (d) { if (!d || !d.ok) return Promise.reject(); })
-        .catch(function () {
-          appUrl = FAAM_HOSTED + "/browserversion";
-          link.setAttribute("href", appUrl);
-        });
-    } catch (e) {
-      appUrl = FAAM_HOSTED + "/browserversion";
-      link.setAttribute("href", appUrl);
-    }
+    // The browser version is a free, static demo dashboard bundled next to this
+    // page (no backend needed). The href is set in the markup: dashboard/
 
     function nativeOpen(url) {
       try {
@@ -496,7 +480,7 @@
     link.addEventListener("click", function (e) {
       if (isNative()) {                // open in the real browser, not the app window
         e.preventDefault();
-        if (!nativeOpen(link.getAttribute("href"))) window.open(link.getAttribute("href"), "_blank");
+        if (!nativeOpen(link.href)) window.open(link.href, "_blank");
       }
       // In a normal browser, the target="_blank" link opens the app in a new tab.
     });
