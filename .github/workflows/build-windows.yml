@@ -20,6 +20,10 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    # Needed so a tag build can attach FAAM.exe to a GitHub Release.
+    # (GitHub's default workflow token is often read-only.)
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
