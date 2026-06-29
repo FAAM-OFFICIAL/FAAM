@@ -99,6 +99,16 @@
   .ai-card p{margin:0 0 14px;color:var(--text-2);font-size:13px;line-height:1.5}
   .ai-card .cta{width:100%;justify-content:center}
   .pill{font-size:10px;font-weight:800;color:#fff;background:var(--accent-2);padding:2px 7px;border-radius:999px}
+  .pill.live{background:var(--green)}
+  .ai-out{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;font-size:13px;color:var(--text-2);min-height:62px;white-space:pre-wrap;line-height:1.5;margin-bottom:10px}
+  .ai-ask{display:flex;gap:6px;margin-bottom:8px}
+  .ai-ask input{flex:1;min-width:0;padding:9px 10px;border:1px solid var(--border);border-radius:9px;background:var(--panel-2);color:var(--text);font-size:13px}
+  .ai-ask button{padding:9px 14px;border:0;border-radius:9px;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
+  .ai-ask button:disabled{opacity:.5;cursor:default}
+  .ai-quick{width:100%;padding:9px;border:1px dashed var(--border-strong);border-radius:9px;background:transparent;color:var(--accent);font-weight:600;cursor:pointer;font-size:12px}
+  .ai-quick:hover{background:var(--accent-soft)}
+  .ai-mini{display:block;margin-top:10px;font-size:11px;color:var(--muted);text-align:center}
+  .ai-mini a{color:var(--accent);text-decoration:none}
   /* modal */
   .modal{position:fixed;inset:0;background:rgba(8,12,20,.55);display:none;place-items:center;z-index:60;padding:20px}
   .modal.open{display:grid}
@@ -129,6 +139,7 @@
     <span class="demo-tag">In-browser demo</span>
     <span class="spacer"></span>
     <span class="clock" id="clock">—</span>
+    <button class="iconbtn" id="keyBtn" title="Use your own OpenAI key — turn on live AI">🔑</button>
     <button class="iconbtn" id="themeBtn" title="Toggle theme">🌗</button>
     <a class="cta" href="../">Get the full app ▸</a>
   </header>
@@ -164,10 +175,9 @@
         <svg class="chart-box" id="chart" viewBox="0 0 760 300" preserveAspectRatio="none"></svg>
       </section>
 
-      <section class="ai-card">
-        <h3>✨ AI Insights, Chat &amp; Trade Ideas <span class="pill">FULL APP</span></h3>
-        <p>Ask FAAM anything, get GPT-powered insights on any stock, and receive trade ideas (long, short, pairs, hedge). These run on FAAM's secure server — grab the free app to switch them on.</p>
-        <a class="cta" href="../">Download FAAM — it's free in beta ▸</a>
+      <section class="ai-card" id="aiCard">
+        <h3>✨ AI Insights &amp; Chat <span class="pill" id="aiPill">FULL APP</span></h3>
+        <div id="aiBody"></div>
       </section>
     </div>
 
@@ -205,6 +215,21 @@
       <div class="row">
         <button class="btn-ghost" id="mCancel">Cancel</button>
         <button class="btn-go" id="mGo">Prepare order ▸</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bring-your-own-key modal -->
+  <div class="modal" id="keyModal">
+    <div class="sheet">
+      <h3>Use your own OpenAI key</h3>
+      <div class="muted">Turn on live AI right here — no install, no FAAM account.</div>
+      <div class="field"><label>OpenAI API key</label>
+        <input id="kInput" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false"></div>
+      <div class="note">🔒 Saved <b>only in this browser</b> (localStorage) and sent <b>straight to OpenAI</b> — never to FAAM, GitHub, or any server. Use a key with a <b>spending limit</b>; anyone with access to this device can read it. <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style="color:var(--accent)">Get a key ↗</a></div>
+      <div class="row">
+        <button class="btn-ghost" id="kRemove">Remove key</button>
+        <button class="btn-go" id="kSave">Save key</button>
       </div>
     </div>
   </div>
@@ -325,7 +350,7 @@
       '<circle cx="'+pts[pts.length-1][0].toFixed(1)+'" cy="'+pts[pts.length-1][1].toFixed(1)+'" r="4" fill="'+col+'"/>';
   }
 
-  function select(sym){sel=sym;LS.set("sel",sym);renderRail();renderChart()}
+  function select(sym){sel=sym;LS.set("sel",sym);renderRail();renderChart();renderAI()}
 
   // ---- portfolio -----------------------------------------------------
   function renderPort(){
@@ -405,8 +430,73 @@
   var toEl=$("#toast"),tt;
   function toast(m){toEl.textContent=m;toEl.classList.add("show");clearTimeout(tt);tt=setTimeout(function(){toEl.classList.remove("show")},2600)}
 
+  // ---- bring-your-own-key AI -----------------------------------------
+  function aiKey(){return LS.get("aikey","")||""}
+  function openKey(){ $("#kInput").value=aiKey(); $("#keyModal").classList.add("open"); setTimeout(function(){$("#kInput").focus()},50); }
+  $("#keyBtn").addEventListener("click",openKey);
+  $("#keyModal").addEventListener("click",function(e){if(e.target===this)this.classList.remove("open")});
+  $("#kSave").addEventListener("click",function(){
+    var k=$("#kInput").value.trim();
+    if(k&&!/^sk-/.test(k)){toast("That doesn't look like an OpenAI key (starts with sk-)");return}
+    LS.set("aikey",k);$("#keyModal").classList.remove("open");renderAI();
+    toast(k?"AI key saved — live AI is on 🔌":"Key cleared");
+  });
+  $("#kRemove").addEventListener("click",function(){LS.set("aikey","");$("#kInput").value="";$("#keyModal").classList.remove("open");renderAI();toast("Key removed")});
+
+  function renderAI(){
+    var has=!!aiKey(),pill=$("#aiPill"),body=$("#aiBody");
+    pill.textContent=has?"LIVE · YOUR KEY":"FULL APP";
+    pill.classList.toggle("live",has);
+    if(!has){
+      body.innerHTML='<p>Ask FAAM anything and get GPT insights on any stock. Bring your own OpenAI key to switch it on right here — your key stays in your browser.</p>'+
+        '<button class="cta" id="aiAddKey" style="width:100%;justify-content:center;margin-bottom:8px">🔑 Add your OpenAI key</button>'+
+        '<a class="cta" href="../" style="width:100%;justify-content:center;background:transparent;color:var(--accent);border:1px solid var(--border)">Or get the full app ▸</a>';
+      $("#aiAddKey").addEventListener("click",openKey);
+      return;
+    }
+    var u=ensure(sel);
+    body.innerHTML='<div class="ai-out" id="aiOut">Ask about '+sel+' — or any ticker.</div>'+
+      '<div class="ai-ask"><input id="aiQ" placeholder="Is '+sel+' a buy?"><button id="aiSend">Ask</button></div>'+
+      '<button class="ai-quick" id="aiInsight">✨ Quick insight on '+sel+'</button>'+
+      '<span class="ai-mini">Powered by your OpenAI key · <a href="#" id="aiForget">forget key</a></span>';
+    $("#aiSend").addEventListener("click",function(){var q=$("#aiQ").value.trim();if(q)askAI(q)});
+    $("#aiQ").addEventListener("keydown",function(e){if(e.key==="Enter"){var q=this.value.trim();if(q)askAI(q)}});
+    $("#aiInsight").addEventListener("click",function(){
+      askAI("Give a tight 3-sentence take on "+sel+" ("+ensure(sel).name+") for a retail investor: momentum, one bull point, one risk.");
+    });
+    $("#aiForget").addEventListener("click",function(e){e.preventDefault();LS.set("aikey","");renderAI();toast("Key removed")});
+  }
+
+  var aiBusy=false;
+  async function askAI(prompt){
+    if(aiBusy)return; var out=$("#aiOut"),send=$("#aiSend");
+    aiBusy=true; if(out)out.textContent="Thinking…"; if(send)send.disabled=true;
+    try{
+      var r=await fetch("https://api.openai.com/v1/chat/completions",{
+        method:"POST",
+        headers:{"Content-Type":"application/json","Authorization":"Bearer "+aiKey()},
+        body:JSON.stringify({model:"gpt-4.1-mini",temperature:0.6,max_tokens:320,messages:[
+          {role:"system",content:"You are FAAM, a concise markets assistant inside a demo dashboard. Keep answers brief and practical. End with a short reminder that this is not financial advice and that FAAM never places trades — it only prepares order tickets the user reviews."},
+          {role:"user",content:prompt}
+        ]})
+      });
+      if(!r.ok){
+        var txt=await r.text().catch(function(){return""});
+        if(r.status===401){if(out)out.textContent="That key was rejected (401). Tap 🔑 to fix it.";}
+        else if(r.status===429){if(out)out.textContent="OpenAI says rate-limited or out of quota (429). Check your billing.";}
+        else if(out)out.textContent="OpenAI error "+r.status+". "+txt.slice(0,160);
+        return;
+      }
+      var d=await r.json();
+      var msg=(d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content)||"(no response)";
+      if(out)out.textContent=msg.trim();
+    }catch(e){
+      if(out)out.textContent="Couldn't reach OpenAI from the browser (network or CORS). The full app routes this through a server.";
+    }finally{ aiBusy=false; if(send)send.disabled=false; }
+  }
+
   // ---- boot ----------------------------------------------------------
-  renderRail();renderChart();renderPort();clock();
+  renderRail();renderChart();renderPort();renderAI();clock();
   setInterval(clock,1000*20);
   setInterval(tick,3500);
 })();
