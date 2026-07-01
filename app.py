@@ -114,6 +114,7 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 # Yahoo's terms and get an app rejected under App Store guideline 5.2.2. For any
 # shipped/store build, set MARKET_DATA_PROVIDER to a licensed API you've agreed
 # terms with:
+#   "massive"      + MASSIVE_API_KEY / ~/.faam/massive_key — quotes + bars (Polygon-compatible)
 #   "finnhub"      + FINNHUB_API_KEY       — real-time US quotes (candles are paid)
 #   "alphavantage" + ALPHAVANTAGE_API_KEY  — quote + history (free tier ~25/day)
 #   "yahoo"        — unofficial; LOCAL DEV ONLY, never for a store build
@@ -208,6 +209,7 @@ PORTFOLIO_FILE = DATA_DIR / "portfolio.json"
 ADVISER_FILE = DATA_DIR / "adviser.md"
 BROKER_FILE = DATA_DIR / "broker.json"
 STRIPE_KEY_FILE = DATA_DIR / "stripe_key"
+MASSIVE_KEY_FILE = DATA_DIR / "massive_key"   # market-data key, kept off-repo
 USAGE_FILE = DATA_DIR / "usage.json"
 USERS_FILE = DATA_DIR / "users.json"
 SESSION_SECRET_FILE = DATA_DIR / "session_secret"
@@ -285,6 +287,19 @@ def load_broker() -> dict:
 
 def save_broker(pref: dict) -> bool:
     return _save_json(BROKER_FILE, pref)
+
+
+def massive_key() -> str:
+    """Massive.com market-data key from env or ~/.faam/massive_key (never in code)."""
+    v = os.environ.get("MASSIVE_API_KEY", "").strip()
+    if v:
+        return v
+    try:
+        if MASSIVE_KEY_FILE.exists():
+            return MASSIVE_KEY_FILE.read_text().strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
 
 
 # ---------- FAAM Pro (Stripe) ----------
@@ -842,11 +857,73 @@ def _quote_finnhub(symbol: str, range_: str = "1mo", interval: str = "1d") -> di
                         low=(float(q.get("l") or 0) or None))
 
 
+# Massive.com is Polygon-compatible: base https://api.massive.com, key via
+# ?apiKey=, aggregate "bars" endpoints. Basic plans are DELAYED (still fine for
+# quotes + charts); real-time snapshot needs a paid plan, so we build on bars.
+_MASSIVE_BASE = "https://api.massive.com"
+_MASSIVE_TF = {"1m": (1, "minute"), "2m": (2, "minute"), "5m": (5, "minute"),
+               "15m": (15, "minute"), "30m": (30, "minute"), "60m": (60, "minute"),
+               "90m": (90, "minute"), "1d": (1, "day"), "1wk": (1, "week"), "1mo": (1, "month")}
+_MASSIVE_RANGE_DAYS = {"1d": 5, "5d": 10, "1mo": 40, "3mo": 105, "6mo": 195,
+                       "1y": 375, "2y": 745, "5y": 1855, "10y": 3700, "max": 5500}
+
+
+def _quote_massive(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
+    key = massive_key()
+    if not key:
+        return {"symbol": symbol, "error": "MASSIVE_API_KEY not set"}
+    sym = urllib.parse.quote(symbol.upper(), safe="")
+    ek = urllib.parse.quote(key, safe="")
+    mult, span = _MASSIVE_TF.get(interval, (1, "day"))
+    days = _MASSIVE_RANGE_DAYS.get(range_, 40)
+    to = time.strftime("%Y-%m-%d", time.gmtime())
+    frm = time.strftime("%Y-%m-%d", time.gmtime(time.time() - days * 86400))
+    j = _http_json(
+        f"{_MASSIVE_BASE}/v2/aggs/ticker/{sym}/range/{mult}/{span}/{frm}/{to}"
+        f"?adjusted=true&sort=asc&limit=500&apiKey={ek}")
+    status = j.get("status")
+    if status in ("NOT_AUTHORIZED", "ERROR"):
+        return {"symbol": symbol, "error": f"Massive: {j.get('message') or status}"}
+    history = []
+    for b in (j.get("results") or []):
+        t, c = b.get("t"), b.get("c")
+        if t is None or c is None:
+            continue
+        pt = {"t": int(t) // 1000, "c": float(c)}
+        for src, dst in (("o", "o"), ("h", "h"), ("l", "l")):
+            if b.get(src) is not None:
+                pt[dst] = float(b[src])
+        if b.get("v") is not None:
+            pt["v"] = int(float(b["v"]))
+        history.append(pt)
+    if not history:
+        return {"symbol": symbol, "error": "Massive: no bars for this symbol/range"}
+    price = history[-1]["c"]
+    if span == "day" and len(history) >= 2:
+        prev = history[-2]["c"]
+    else:  # intraday: previous *session* close comes from the prev-day bar
+        prev = price
+        try:
+            pj = _http_json(f"{_MASSIVE_BASE}/v2/aggs/ticker/{sym}/prev?adjusted=true&apiKey={ek}")
+            pr = (pj.get("results") or [{}])[0]
+            if pr.get("c"):
+                prev = float(pr["c"])
+        except Exception:  # noqa: BLE001
+            pass
+    change = price - prev
+    pct = (change / prev * 100.0) if prev else 0.0
+    return _empty_quote(symbol, price, prev, change, pct, history,
+                        high=history[-1].get("h"), low=history[-1].get("l"),
+                        volume=history[-1].get("v"))
+
+
 def market_provider() -> str:
     """Which data source is active. Explicit env wins; else auto-pick a licensed
     provider when its key is set; else fall back to Yahoo (dev only)."""
-    if MARKET_DATA_PROVIDER in ("yahoo", "alphavantage", "finnhub"):
+    if MARKET_DATA_PROVIDER in ("yahoo", "alphavantage", "finnhub", "massive"):
         return MARKET_DATA_PROVIDER
+    if massive_key():
+        return "massive"
     if FINNHUB_API_KEY:
         return "finnhub"
     if ALPHAVANTAGE_API_KEY:
@@ -859,6 +936,8 @@ def yahoo_quote(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
     the configured licensed provider; only touches Yahoo in local-dev mode."""
     provider = market_provider()
     try:
+        if provider == "massive":
+            return _quote_massive(symbol, range_, interval)
         if provider == "alphavantage":
             return _quote_alphavantage(symbol, range_, interval)
         if provider == "finnhub":
