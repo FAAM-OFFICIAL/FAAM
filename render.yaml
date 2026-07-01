@@ -25,5 +25,9 @@ services:
         sync: false          # set to https://<your-render-url> in the dashboard
       - key: OPENAI_API_KEY
         sync: false          # your OpenAI key — dashboard only, never in the repo
+      - key: MARKET_DATA_PROVIDER
+        value: massive       # serve live data from Massive.com to every user
+      - key: MASSIVE_API_KEY
+        sync: false          # your Massive.com key — dashboard only, never in the repo
       - key: STRIPE_SECRET_KEY
         sync: false          # your Stripe secret key — dashboard only

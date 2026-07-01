@@ -27,6 +27,12 @@ let remoteURL: String = {
 }()
 let isRemote = !remoteURL.isEmpty
 
+// App Store builds must be REMOTE-ONLY: the bundled Python server is NEVER run
+// (a local server + interpreter isn't allowed under the Mac App Store sandbox).
+// Flip to `true` (or launch with FAAM_REMOTE_ONLY=1) for the App Store build;
+// leave false for local/self-host dev, which keeps the Python fallback.
+let remoteOnly = (ProcessInfo.processInfo.environment["FAAM_REMOTE_ONLY"] == "1")
+
 func diskKey() -> String? {
     if let e = ProcessInfo.processInfo.environment["OPENAI_API_KEY"], !e.isEmpty { return e }
     if let s = try? String(contentsOfFile: faamDir + "/key", encoding: .utf8) {
@@ -76,13 +82,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKUI
                 guard let self = self else { return }
                 if ok, let u = URL(string: remoteURL + "/login") {
                     self.webView?.load(URLRequest(url: u))
+                } else if remoteOnly {
+                    self.showRemoteError()          // App Store: never fall back to Python
                 } else {
                     self.startLocal()
                 }
             }
             return
         }
+        if remoteOnly { showRemoteError(); return }  // safety: never run Python here either
         startLocal()
+    }
+
+    // Shown only in remote-only (App Store) builds when the backend is offline.
+    func showRemoteError() {
+        let html = """
+        <html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
+        <style>body{font-family:-apple-system,system-ui;background:#0B1220;color:#E7ECF3;
+        display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}
+        .b{max-width:360px;padding:24px}h1{font-size:20px;margin:0 0 8px}p{color:#8A97AD;line-height:1.5}
+        button{margin-top:16px;padding:10px 20px;border:0;border-radius:10px;background:#2E64F0;color:#fff;font-weight:700;cursor:pointer}</style>
+        </head><body><div class='b'><h1>Can’t reach FAAM</h1>
+        <p>FAAM couldn’t connect to its server. Check your internet connection and try again.</p>
+        <button onclick='location.reload()'>Retry</button></div></body></html>
+        """
+        webView?.loadHTMLString(html, baseURL: URL(string: remoteURL))
     }
 
     // Is the hosted backend up? (Short timeout so startup never stalls.)
