@@ -123,6 +123,16 @@ MARKET_DATA_PROVIDER = os.environ.get("MARKET_DATA_PROVIDER", "").strip().lower(
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "").strip()
 ALPHAVANTAGE_API_KEY = os.environ.get("ALPHAVANTAGE_API_KEY", "").strip()
 
+# Make HTTPS certificate verification work even on Python builds where the macOS
+# "Install Certificates" step was never run (a common cause of urllib SSL errors).
+# Uses certifi's CA bundle when it's available — no hard dependency, skipped if not.
+try:
+    import certifi as _certifi  # noqa: E402
+    os.environ.setdefault("SSL_CERT_FILE", _certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", _certifi.where())
+except Exception:  # noqa: BLE001
+    pass
+
 # Voice mode (speech-to-text + text-to-speech), all via the same OpenAI key.
 STT_MODEL = os.environ.get("FAAM_STT_MODEL", "whisper-1")
 TTS_MODEL = os.environ.get("FAAM_TTS_MODEL", "tts-1")
