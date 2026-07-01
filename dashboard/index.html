@@ -145,8 +145,8 @@
   </header>
 
   <div class="demo-banner">
-    <span>📊 <b>Live demo</b> — prices are simulated so it runs free with no install.</span>
-    <a href="../">Download FAAM for live prices + AI ▸</a>
+    <span id="dataNote">📊 <b>Live demo</b> — prices are simulated so it runs free with no install.</span>
+    <a href="#" id="dataKeyLink" style="color:var(--accent);font-weight:700;text-decoration:none">Add an Alpha Vantage key for live prices ▸</a>
   </div>
 
   <section class="rail" id="rail"></section>
@@ -222,14 +222,18 @@
   <!-- Bring-your-own-key modal -->
   <div class="modal" id="keyModal">
     <div class="sheet">
-      <h3>Use your own OpenAI key</h3>
-      <div class="muted">Turn on live AI right here — no install, no FAAM account.</div>
-      <div class="field"><label>OpenAI API key</label>
+      <h3>Your keys</h3>
+      <div class="muted">Bring your own keys — stored only in this browser, sent straight to the provider.</div>
+      <div class="field"><label>OpenAI API key — turns on AI chat &amp; insights</label>
         <input id="kInput" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false"></div>
-      <div class="note">🔒 Saved <b>only in this browser</b> (localStorage) and sent <b>straight to OpenAI</b> — never to FAAM, GitHub, or any server. Use a key with a <b>spending limit</b>; anyone with access to this device can read it. <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style="color:var(--accent)">Get a key ↗</a></div>
+      <div class="field"><label>Alpha Vantage API key — turns on live market prices</label>
+        <input id="avInput" type="password" placeholder="e.g. 8XY2Q..." autocomplete="off" spellcheck="false"></div>
+      <div class="note">🔒 Saved <b>only in this browser</b> (localStorage) and sent <b>straight to OpenAI / Alpha Vantage</b> — never to FAAM, GitHub, or any server. Alpha Vantage's free tier is <b>~25 calls/day</b>, so prices are cached and fall back to simulated when the quota runs out.<br>
+        <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" style="color:var(--accent)">Get an OpenAI key ↗</a> &nbsp;·&nbsp;
+        <a href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noopener" style="color:var(--accent)">Get a free Alpha Vantage key ↗</a></div>
       <div class="row">
-        <button class="btn-ghost" id="kRemove">Remove key</button>
-        <button class="btn-go" id="kSave">Save key</button>
+        <button class="btn-ghost" id="kRemove">Clear all</button>
+        <button class="btn-go" id="kSave">Save</button>
       </div>
     </div>
   </div>
@@ -305,7 +309,7 @@
   function renderRail(){
     var el=$("#rail");el.innerHTML="";
     watch.forEach(function(sym){
-      var u=ensure(sym),up=chgPct(u)>=0,s=genSeries(sym,"1M");
+      var u=ensure(sym),up=chgPct(u)>=0,s=(u.series&&u.series.length>2?u.series.slice(Math.max(0,u.series.length-24)):genSeries(sym,"1M"));
       var d=document.createElement("div");
       d.className="tcard"+(sym===sel?" sel":"");
       d.innerHTML='<button class="rm" data-rm="'+sym+'" title="Remove">✕</button>'+
@@ -330,7 +334,10 @@
 
   // ---- chart ---------------------------------------------------------
   function renderChart(){
-    var u=ensure(sel),arr=genSeries(sel,range),up=chgPct(u)>=0;
+    var u=ensure(sel),up=chgPct(u)>=0,arr;
+    var RCOUNT={"1D":6,"1W":6,"1M":22,"3M":66,"1Y":100};
+    if(u.series&&u.series.length>2){ var n=RCOUNT[range]||22; arr=u.series.slice(Math.max(0,u.series.length-n)); arr[arr.length-1]=u.cur; }
+    else { arr=genSeries(sel,range); }
     $("#cName").textContent=u.name;$("#cSym").textContent=sel;
     $("#cPx").textContent=fmt(u.cur);
     var c=$("#cCh");c.textContent=pct(chgPct(u))+"  ("+(u.cur-u.prev>=0?"+":"")+fmt(u.cur-u.prev).replace("$","$")+")";
@@ -350,7 +357,9 @@
       '<circle cx="'+pts[pts.length-1][0].toFixed(1)+'" cy="'+pts[pts.length-1][1].toFixed(1)+'" r="4" fill="'+col+'"/>';
   }
 
-  function select(sym){sel=sym;LS.set("sel",sym);renderRail();renderChart();renderAI()}
+  function select(sym){sel=sym;LS.set("sel",sym);renderRail();renderChart();renderAI();
+    if(avKey()&&!quotaHit&&!ensure(sym).series){ syncSeries(sym).then(function(){renderChart()}); syncQuote(sym).then(function(){renderRail();renderChart()}); }
+  }
 
   // ---- portfolio -----------------------------------------------------
   function renderPort(){
@@ -409,7 +418,7 @@
 
   // ---- live tick + clock --------------------------------------------
   function tick(){
-    Object.keys(UNIV).forEach(function(k){var u=UNIV[k];var r=(Math.random()-0.5);u.cur=Math.max(0.5,u.cur*(1+r*0.0012))});
+    Object.keys(UNIV).forEach(function(k){var u=UNIV[k];var amp=u.real?0.0003:0.0012;u.cur=Math.max(0.5,u.cur*(1+(Math.random()-0.5)*amp))});
     // only repaint what's visible
     renderRail();renderChart();renderPort();
   }
@@ -432,16 +441,25 @@
 
   // ---- bring-your-own-key AI -----------------------------------------
   function aiKey(){return LS.get("aikey","")||""}
-  function openKey(){ $("#kInput").value=aiKey(); $("#keyModal").classList.add("open"); setTimeout(function(){$("#kInput").focus()},50); }
+  function openKey(){ $("#kInput").value=aiKey(); $("#avInput").value=avKey(); $("#keyModal").classList.add("open"); setTimeout(function(){$("#kInput").focus()},50); }
   $("#keyBtn").addEventListener("click",openKey);
+  $("#dataKeyLink").addEventListener("click",function(e){e.preventDefault();openKey()});
   $("#keyModal").addEventListener("click",function(e){if(e.target===this)this.classList.remove("open")});
   $("#kSave").addEventListener("click",function(){
-    var k=$("#kInput").value.trim();
+    var k=$("#kInput").value.trim(), av=$("#avInput").value.trim();
     if(k&&!/^sk-/.test(k)){toast("That doesn't look like an OpenAI key (starts with sk-)");return}
-    LS.set("aikey",k);$("#keyModal").classList.remove("open");renderAI();
-    toast(k?"AI key saved — live AI is on 🔌":"Key cleared");
+    var avChanged = av!==avKey();
+    LS.set("aikey",k); LS.set("avkey",av);
+    $("#keyModal").classList.remove("open"); renderAI(); renderDataNote();
+    toast((k?"AI on. ":"")+(av?"Live prices on 📈":(k?"":"Keys cleared")));
+    if(av&&avChanged){ quotaHit=false; syncAll(); }        // fetch real data now
+    else if(!av){ Object.keys(UNIV).forEach(function(x){UNIV[x].real=false;delete UNIV[x].series}); renderRail(); renderChart(); }
   });
-  $("#kRemove").addEventListener("click",function(){LS.set("aikey","");$("#kInput").value="";$("#keyModal").classList.remove("open");renderAI();toast("Key removed")});
+  $("#kRemove").addEventListener("click",function(){
+    LS.set("aikey","");LS.set("avkey","");$("#kInput").value="";$("#avInput").value="";
+    Object.keys(UNIV).forEach(function(x){UNIV[x].real=false;delete UNIV[x].series});
+    $("#keyModal").classList.remove("open");renderAI();renderDataNote();renderRail();renderChart();toast("Keys cleared");
+  });
 
   function renderAI(){
     var has=!!aiKey(),pill=$("#aiPill"),body=$("#aiBody");
@@ -495,8 +513,68 @@
     }finally{ aiBusy=false; if(send)send.disabled=false; }
   }
 
+  // ---- live market data (Alpha Vantage, bring-your-own-key) ----------
+  function avKey(){return LS.get("avkey","")||""}
+  var quotaHit=false, syncing=false;
+  function avCacheGet(k){var v=LS.get("avc_"+k,null); return (v&&Date.now()-v.t<v.ttl)?v.d:null}
+  function avCacheSet(k,d,ttl){LS.set("avc_"+k,{t:Date.now(),ttl:ttl,d:d})}
+  function avq(fn,sym,extra){return "https://www.alphavantage.co/query?function="+fn+"&symbol="+encodeURIComponent(sym)+"&apikey="+encodeURIComponent(avKey())+(extra||"")}
+  function applyQuote(sym,q){var u=ensure(sym);u.cur=q.price;u.prev=q.prev;u.real=true}
+
+  async function avFetch(url){
+    var r=await fetch(url); var j=await r.json();
+    if(j["Error Message"]) throw new Error("bad-symbol");
+    if(j["Note"]||j["Information"]){ quotaHit=true; throw new Error("quota"); }
+    return j;
+  }
+  async function syncQuote(sym){
+    if(!avKey()||quotaHit)return false;
+    var c=avCacheGet("q_"+sym); if(c){applyQuote(sym,c);return true}
+    try{
+      var j=await avFetch(avq("GLOBAL_QUOTE",sym));
+      var g=j["Global Quote"]||{}, price=parseFloat(g["05. price"]), prev=parseFloat(g["08. previous close"]);
+      if(!(price>0))return false;
+      var q={price:price,prev:(prev>0?prev:price)}; avCacheSet("q_"+sym,q,10*60*1000); applyQuote(sym,q); return true;
+    }catch(e){return false}
+  }
+  async function syncSeries(sym){
+    if(!avKey()||quotaHit)return false;
+    var c=avCacheGet("s_"+sym); if(c){ensure(sym).series=c;return true}
+    try{
+      var j=await avFetch(avq("TIME_SERIES_DAILY",sym,"&outputsize=compact"));
+      var ts=j["Time Series (Daily)"]; if(!ts)return false;
+      var arr=Object.keys(ts).sort().map(function(d){return parseFloat(ts[d]["4. close"])}).filter(function(x){return x>0});
+      if(arr.length<2)return false;
+      ensure(sym).series=arr; avCacheSet("s_"+sym,arr,60*60*1000); return true;
+    }catch(e){return false}
+  }
+  // Spend the free-tier budget wisely: selected symbol first (quote + chart),
+  // then the rest of the watchlist quotes, stopping the moment quota runs out.
+  async function syncAll(){
+    if(!avKey()||syncing)return; syncing=true; renderDataNote();
+    await syncSeries(sel);
+    var order=[sel].concat(watch.filter(function(s){return s!==sel}));
+    for(var i=0;i<order.length;i++){ if(quotaHit)break; await syncQuote(order[i]); renderRail(); if(order[i]===sel)renderChart(); }
+    syncing=false; renderDataNote(); renderRail(); renderChart(); renderPort();
+    if(quotaHit)toast("Alpha Vantage limit reached or key rejected — using cached + simulated data");
+  }
+  function renderDataNote(){
+    var el=$("#dataNote"), link=$("#dataKeyLink"); if(!el)return;
+    if(!avKey()){
+      el.innerHTML='📊 <b>Live demo</b> — prices are simulated so it runs free with no install.';
+      if(link)link.textContent="Add an Alpha Vantage key for live prices ▸";
+    }else if(quotaHit){
+      el.innerHTML='📈 <b>Alpha Vantage</b> — hit the free daily limit or the key was rejected; showing cached + simulated. Check the key in Manage keys.';
+      if(link)link.textContent="Manage keys ▸";
+    }else{
+      el.innerHTML='📈 <b>Live prices via Alpha Vantage</b> (your key) — daily data, cached to stay within the free tier.'+(syncing?' <span style="opacity:.7">· syncing…</span>':'');
+      if(link)link.textContent="Manage keys ▸";
+    }
+  }
+
   // ---- boot ----------------------------------------------------------
-  renderRail();renderChart();renderPort();renderAI();clock();
+  renderRail();renderChart();renderPort();renderAI();renderDataNote();clock();
+  if(avKey())syncAll();
   setInterval(clock,1000*20);
   setInterval(tick,3500);
 })();
