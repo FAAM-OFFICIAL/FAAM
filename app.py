@@ -110,6 +110,18 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.environ.get("FAAM_MODEL", "gpt-4.1-mini")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
+# Market data provider. Yahoo's chart API is UNOFFICIAL — using it can breach
+# Yahoo's terms and get an app rejected under App Store guideline 5.2.2. For any
+# shipped/store build, set MARKET_DATA_PROVIDER to a licensed API you've agreed
+# terms with:
+#   "finnhub"      + FINNHUB_API_KEY       — real-time US quotes (candles are paid)
+#   "alphavantage" + ALPHAVANTAGE_API_KEY  — quote + history (free tier ~25/day)
+#   "yahoo"        — unofficial; LOCAL DEV ONLY, never for a store build
+# If unset, we auto-pick a licensed provider when its key is present, else Yahoo.
+MARKET_DATA_PROVIDER = os.environ.get("MARKET_DATA_PROVIDER", "").strip().lower()
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "").strip()
+ALPHAVANTAGE_API_KEY = os.environ.get("ALPHAVANTAGE_API_KEY", "").strip()
+
 # Voice mode (speech-to-text + text-to-speech), all via the same OpenAI key.
 STT_MODEL = os.environ.get("FAAM_STT_MODEL", "whisper-1")
 TTS_MODEL = os.environ.get("FAAM_TTS_MODEL", "tts-1")
@@ -608,8 +620,9 @@ _YH_RANGES = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "
 _YH_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"}
 
 
-def yahoo_quote(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
-    """Fetch quote + history from Yahoo Finance public chart API."""
+def _quote_yahoo(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
+    """Fetch quote + history from Yahoo Finance public chart API.
+    UNOFFICIAL — local-dev fallback only; not for shipped/App Store builds."""
     # Allowlist range/interval so they can't inject extra query params upstream.
     if range_ not in _YH_RANGES:
         range_ = "1mo"
@@ -702,6 +715,157 @@ def yahoo_quote(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
         "fiftyTwoWeekHigh": meta.get("fiftyTwoWeekHigh"),
         "fiftyTwoWeekLow": meta.get("fiftyTwoWeekLow"),
     }
+
+
+# ---- Licensed market-data adapters (App Store / ToS safe) --------------
+# Each returns the SAME shape as _quote_yahoo, so every caller works unchanged.
+def _http_json(url: str, timeout: int = 12) -> dict:
+    req = urllib.request.Request(url, headers={"User-Agent": "FAAM/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def _empty_quote(symbol: str, price=0.0, prev=0.0, change=0.0, pct=0.0,
+                 history=None, high=None, low=None, volume=None) -> dict:
+    return {
+        "symbol": symbol, "name": symbol,
+        "price": float(price), "prev_close": float(prev),
+        "change": float(change), "pct": float(pct),
+        "marketState": "REGULAR",
+        "extPrice": None, "extChange": None, "extPct": None, "extLabel": "",
+        "currency": "USD", "exchange": "", "quoteType": "",
+        "history": history or [],
+        "high": high, "low": low, "volume": volume,
+        "fiftyTwoWeekHigh": None, "fiftyTwoWeekLow": None,
+    }
+
+
+_AV_INTRADAY = {"1m": "1min", "2m": "1min", "5m": "5min", "15m": "15min",
+                "30m": "30min", "60m": "60min", "90m": "60min"}
+
+
+def _quote_alphavantage(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
+    if not ALPHAVANTAGE_API_KEY:
+        return {"symbol": symbol, "error": "ALPHAVANTAGE_API_KEY not set"}
+    sym = urllib.parse.quote(symbol, safe="")
+    key = urllib.parse.quote(ALPHAVANTAGE_API_KEY, safe="")
+    base = "https://www.alphavantage.co/query"
+    if interval in _AV_INTRADAY:
+        iv = _AV_INTRADAY[interval]
+        hurl = f"{base}?function=TIME_SERIES_INTRADAY&symbol={sym}&interval={iv}&outputsize=compact&apikey={key}"
+        ts_key = f"Time Series ({iv})"
+    else:
+        hurl = f"{base}?function=TIME_SERIES_DAILY&symbol={sym}&outputsize=compact&apikey={key}"
+        ts_key = "Time Series (Daily)"
+    hj = _http_json(hurl)
+    if hj.get("Note") or hj.get("Information"):
+        return {"symbol": symbol, "error": "Alpha Vantage rate limit or invalid key"}
+    if hj.get("Error Message"):
+        return {"symbol": symbol, "error": "Alpha Vantage: unknown symbol"}
+    ts = hj.get(ts_key) or {}
+    history = []
+    for dstr in sorted(ts.keys()):
+        row = ts[dstr]
+        try:
+            fmt = "%Y-%m-%d %H:%M:%S" if " " in dstr else "%Y-%m-%d"
+            t = int(time.mktime(time.strptime(dstr[:len(fmt) + 2], fmt)))
+            history.append({
+                "t": t,
+                "o": float(row["1. open"]), "h": float(row["2. high"]),
+                "l": float(row["3. low"]), "c": float(row["4. close"]),
+                "v": int(float(row.get("5. volume", 0) or 0)),
+            })
+        except Exception:  # noqa: BLE001
+            continue
+    gj = _http_json(f"{base}?function=GLOBAL_QUOTE&symbol={sym}&apikey={key}")
+    g = gj.get("Global Quote") or {}
+
+    def _f(k, d=0.0):
+        try:
+            return float(g.get(k) or d)
+        except Exception:  # noqa: BLE001
+            return d
+    price = _f("05. price") or (history[-1]["c"] if history else 0.0)
+    prev = _f("08. previous close") or (history[-2]["c"] if len(history) > 1 else price)
+    change = price - prev
+    pct = (change / prev * 100.0) if prev else 0.0
+    return _empty_quote(symbol, price, prev, change, pct, history,
+                        high=(_f("03. high") or None), low=(_f("04. low") or None),
+                        volume=(int(_f("06. volume")) or None))
+
+
+_FH_RES = {"1m": "1", "2m": "1", "5m": "5", "15m": "15", "30m": "30",
+           "60m": "60", "90m": "60", "1d": "D", "1wk": "W", "1mo": "M"}
+_FH_RANGE_SEC = {"1d": 86400 * 3, "5d": 86400 * 8, "1mo": 86400 * 35, "3mo": 86400 * 100,
+                 "6mo": 86400 * 190, "1y": 86400 * 370, "2y": 86400 * 740,
+                 "5y": 86400 * 1850, "10y": 86400 * 3700, "max": 86400 * 5500}
+
+
+def _quote_finnhub(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
+    if not FINNHUB_API_KEY:
+        return {"symbol": symbol, "error": "FINNHUB_API_KEY not set"}
+    sym = urllib.parse.quote(symbol, safe="")
+    tok = urllib.parse.quote(FINNHUB_API_KEY, safe="")
+    q = _http_json(f"https://finnhub.io/api/v1/quote?symbol={sym}&token={tok}")
+    price = float(q.get("c") or 0.0)
+    prev = float(q.get("pc") or 0.0)
+    if not price:
+        return {"symbol": symbol, "error": "Finnhub: no quote (unknown symbol or limit)"}
+    change = float(q.get("d") or (price - prev))
+    pct = float(q.get("dp") or ((change / prev * 100.0) if prev else 0.0))
+    history = []
+    try:  # candles are a paid Finnhub feature — degrade to empty history on free
+        res = _FH_RES.get(interval, "D")
+        now = int(time.time())
+        frm = now - _FH_RANGE_SEC.get(range_, 86400 * 35)
+        cj = _http_json(
+            f"https://finnhub.io/api/v1/stock/candle?symbol={sym}&resolution={res}"
+            f"&from={frm}&to={now}&token={tok}")
+        if cj.get("s") == "ok":
+            ts, c = cj.get("t") or [], cj.get("c") or []
+            o, h, l, v = cj.get("o") or [], cj.get("h") or [], cj.get("l") or [], cj.get("v") or []
+            for i in range(len(ts)):
+                pt = {"t": int(ts[i]), "c": float(c[i])}
+                if i < len(o):
+                    pt["o"] = float(o[i])
+                if i < len(h):
+                    pt["h"] = float(h[i])
+                if i < len(l):
+                    pt["l"] = float(l[i])
+                if i < len(v):
+                    pt["v"] = int(v[i])
+                history.append(pt)
+    except Exception:  # noqa: BLE001
+        pass
+    return _empty_quote(symbol, price, prev, change, pct, history,
+                        high=(float(q.get("h") or 0) or None),
+                        low=(float(q.get("l") or 0) or None))
+
+
+def market_provider() -> str:
+    """Which data source is active. Explicit env wins; else auto-pick a licensed
+    provider when its key is set; else fall back to Yahoo (dev only)."""
+    if MARKET_DATA_PROVIDER in ("yahoo", "alphavantage", "finnhub"):
+        return MARKET_DATA_PROVIDER
+    if FINNHUB_API_KEY:
+        return "finnhub"
+    if ALPHAVANTAGE_API_KEY:
+        return "alphavantage"
+    return "yahoo"
+
+
+def yahoo_quote(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
+    """Provider-agnostic quote + history (name kept for back-compat). Routes to
+    the configured licensed provider; only touches Yahoo in local-dev mode."""
+    provider = market_provider()
+    try:
+        if provider == "alphavantage":
+            return _quote_alphavantage(symbol, range_, interval)
+        if provider == "finnhub":
+            return _quote_finnhub(symbol, range_, interval)
+        return _quote_yahoo(symbol, range_, interval)
+    except Exception as e:  # noqa: BLE001
+        return {"symbol": symbol, "error": f"{provider}: {e}"}
 
 
 def cached_quote(symbol: str) -> dict:
@@ -2303,6 +2467,7 @@ NOT FINANCIAL ADVICE.
                 "adviser_loaded": bool(load_adviser()),
                 "voice_enabled": bool(OPENAI_API_KEY),
                 "tts_voice": TTS_VOICE,
+                "dataProvider": market_provider(),
             })
 
         if path == "/api/adviser":
