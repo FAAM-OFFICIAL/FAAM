@@ -946,20 +946,57 @@ def market_provider() -> str:
     return "yahoo"
 
 
+# Short-TTL quote cache + Yahoo fallback. Licensed plans (e.g. Massive's ~5
+# req/min basic tier) rate-limit bursts, so a 10-ticker dashboard would show
+# half the symbols as "unavailable". We cache results (data is delayed anyway)
+# and, when the provider can't serve a symbol in time, fall back to Yahoo so the
+# dashboard still fills in. Set FAAM_YAHOO_FALLBACK=0 to disable (store builds).
+_YQ_CACHE: dict = {}
+_YQ_CACHE_LOCK = threading.Lock()
+_YQ_TTL = float(os.environ.get("FAAM_QUOTE_TTL", "180"))
+ALLOW_YAHOO_FALLBACK = os.environ.get("FAAM_YAHOO_FALLBACK", "1") != "0"
+
+
+def _call_provider(provider: str, symbol: str, range_: str, interval: str) -> dict:
+    if provider == "massive":
+        return _quote_massive(symbol, range_, interval)
+    if provider == "alphavantage":
+        return _quote_alphavantage(symbol, range_, interval)
+    if provider == "finnhub":
+        return _quote_finnhub(symbol, range_, interval)
+    return _quote_yahoo(symbol, range_, interval)
+
+
 def yahoo_quote(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
-    """Provider-agnostic quote + history (name kept for back-compat). Routes to
-    the configured licensed provider; only touches Yahoo in local-dev mode."""
+    """Provider-agnostic quote + history (name kept for back-compat): cached,
+    with a Yahoo fallback when the licensed provider is rate-limited or errors."""
     provider = market_provider()
+    key = (provider, (symbol or "").upper(), range_, interval)
+    now = time.time()
+    with _YQ_CACHE_LOCK:
+        hit = _YQ_CACHE.get(key)
+        if hit and now - hit[0] < _YQ_TTL:
+            return hit[1]
     try:
-        if provider == "massive":
-            return _quote_massive(symbol, range_, interval)
-        if provider == "alphavantage":
-            return _quote_alphavantage(symbol, range_, interval)
-        if provider == "finnhub":
-            return _quote_finnhub(symbol, range_, interval)
-        return _quote_yahoo(symbol, range_, interval)
+        res = _call_provider(provider, symbol, range_, interval)
     except Exception as e:  # noqa: BLE001
-        return {"symbol": symbol, "error": f"{provider}: {e}"}
+        res = {"symbol": symbol, "error": f"{provider}: {e}"}
+    # Provider couldn't serve it (rate limit / error) — back off to Yahoo so the
+    # user still sees data. Disabled when FAAM_YAHOO_FALLBACK=0.
+    if res.get("error") and provider != "yahoo" and ALLOW_YAHOO_FALLBACK:
+        try:
+            fb = _quote_yahoo(symbol, range_, interval)
+            if not fb.get("error"):
+                res = fb
+        except Exception:  # noqa: BLE001
+            pass
+    if not res.get("error"):
+        with _YQ_CACHE_LOCK:
+            _YQ_CACHE[key] = (now, res)
+            if len(_YQ_CACHE) > 400:
+                for k in sorted(_YQ_CACHE, key=lambda kk: _YQ_CACHE[kk][0])[:80]:
+                    _YQ_CACHE.pop(k, None)
+    return res
 
 
 def cached_quote(symbol: str) -> dict:
