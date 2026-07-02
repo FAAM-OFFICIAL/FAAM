@@ -193,6 +193,71 @@ function openIdeas() {
   loadIdeas();
 }
 
+/* ---------- Titan — chat with the local model, and teach it ---------- */
+let titanPendingQ = "";
+function openTitan() {
+  openDialog("titanDialog", "titanInput");
+  loadTitanStat();
+  const log = $("#titanLog");
+  if (log && !log.children.length) {
+    titanBubble("bot", "Hi, I'm Titan. Ask me anything I've learned from your FAAM answers — and if I don't know, you can teach me so I remember next time.");
+  }
+}
+function titanBubble(who, text) {
+  const log = $("#titanLog");
+  const d = document.createElement("div");
+  d.className = "titan-msg " + (who === "you" ? "titan-you" : "titan-bot");
+  d.textContent = text;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  return d;
+}
+async function loadTitanStat() {
+  try {
+    const d = await (await fetch("/api/titan")).json();
+    const el = $("#titanStat");
+    if (el) el.textContent = `${d.version || "Titan 1.1 Beta"} · learned ${d.learned || 0} · ${d.recalls || 0} recalls`;
+  } catch { /* ignore */ }
+}
+async function titanAsk(q) {
+  titanBubble("you", q);
+  $("#titanTeach").hidden = true;
+  const thinking = titanBubble("bot", "…");
+  try {
+    const r = await fetch("/api/titan/ask", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: q }),
+    });
+    const d = await r.json();
+    if (d.known) {
+      thinking.textContent = d.answer;
+    } else {
+      thinking.textContent = "I don't know that yet. Can you teach me the answer?";
+      titanPendingQ = q;
+      $("#titanTeach").hidden = false;
+      setTimeout(() => $("#titanAnswer")?.focus(), 60);
+    }
+    loadTitanStat();
+  } catch {
+    thinking.textContent = "Couldn't reach Titan. Try again.";
+  }
+}
+async function titanTeach() {
+  const a = ($("#titanAnswer").value || "").trim();
+  if (!a || !titanPendingQ) return;
+  try {
+    await fetch("/api/titan/teach", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: titanPendingQ, answer: a }),
+    });
+    $("#titanTeach").hidden = true;
+    $("#titanAnswer").value = "";
+    titanBubble("bot", "Got it — I've learned that. Thanks for teaching me! 🎓 Ask me again anytime.");
+    titanPendingQ = "";
+    loadTitanStat();
+  } catch { /* ignore */ }
+}
+
 async function loadIdeas() {
   const list = $("#ideasList");
   list.innerHTML = '<div class="ideas-loading muted small">Thinking up ideas from your watchlist…</div>';
@@ -2975,6 +3040,15 @@ function wire() {
   // AI trade ideas
   $("#ideasBtn").addEventListener("click", openIdeas);
   $("#closeIdeas").addEventListener("click", () => $("#ideasDialog").close());
+  $("#titanBtn")?.addEventListener("click", openTitan);
+  $("#closeTitan")?.addEventListener("click", () => $("#titanDialog").close());
+  $("#titanForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = ($("#titanInput").value || "").trim();
+    if (q) { $("#titanInput").value = ""; titanAsk(q); }
+  });
+  $("#titanSaveBtn")?.addEventListener("click", titanTeach);
+  $("#titanSkip")?.addEventListener("click", () => { $("#titanTeach").hidden = true; titanPendingQ = ""; });
   $("#ideasRegen").addEventListener("click", loadIdeas);
   $("#ideasList").addEventListener("click", (e) => {
     const tk = e.target.closest("[data-tick]");

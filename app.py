@@ -3417,6 +3417,29 @@ NOT FINANCIAL ADVICE.
                 "titan": titan_stats(),
             })
 
+        # Chat directly with Titan (its own knowledge only — no OpenAI).
+        if path == "/api/titan/ask":
+            body = self._read_json()
+            q = (body.get("question") or "").strip()
+            if not q:
+                return self._json({"error": "empty question"}, 400)
+            recall = titan_recall(q)
+            if recall:
+                return self._json({"known": True, "answer": recall["answer"],
+                                   "score": recall["score"], "matched": recall["matched"],
+                                   **titan_stats()})
+            return self._json({"known": False, **titan_stats()})
+
+        # Teach Titan an answer it didn't know — this is how it grows.
+        if path == "/api/titan/teach":
+            body = self._read_json()
+            q = (body.get("question") or "").strip()
+            a = (body.get("answer") or "").strip()
+            if not q or not a:
+                return self._json({"error": "need a question and an answer"}, 400)
+            titan_learn(q, a)
+            return self._json({"ok": True, **titan_stats()})
+
         if path == "/api/analyze":
             if usage_blocked():
                 return self._json(USAGE_LIMIT_MSG, 402)
