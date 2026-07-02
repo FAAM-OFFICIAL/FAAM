@@ -68,6 +68,11 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # What's-new feed: shown in-app, and the top version drives the "new" badge.
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
+    {"version": "1.6", "date": "2026-07-02", "title": "Meet Titan 1.1 Beta", "items": [
+        {"tag": "new", "text": "Titan 1.1 Beta — a local model that learns from every question you ask while your OpenAI key is working."},
+        {"tag": "new", "text": "Titan recalls answers on its own for similar questions and can stand in when OpenAI is unavailable."},
+        {"tag": "improved", "text": "Licensed market data (Massive.com) with graceful fallback; more reliable HTTPS."},
+    ]},
     {"version": "1.5", "date": "2026-06-20", "title": "Free for everyone — beta", "items": [
         {"tag": "new", "text": "FAAM is in beta: every plan, model and tool is unlocked and free for everyone."},
         {"tag": "improved", "text": "Billing is paused — no card needed. Paid plans return at launch."},
@@ -1259,6 +1264,104 @@ def _parse_json_obj(text: str) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+# ---------- Titan 1.1 Beta — the local model that learns from every answer ----
+# Titan is a lightweight, pure-Python learning layer (no ML libraries): it records
+# every question and its OpenAI answer, indexes them by term-frequency similarity,
+# and can recall an answer on its own for a close future question. It gets better
+# the more FAAM is used, and stands in when the OpenAI key is unavailable.
+TITAN_VERSION = "Titan 1.1 Beta"
+TITAN_FILE = DATA_DIR / "titan.json"
+TITAN_MAX = 800            # rolling cap on learned entries
+TITAN_RECALL_MIN = 0.45    # similarity Titan needs to answer on its own
+_TITAN_LOCK = threading.Lock()
+_TITAN_STOP = frozenset(
+    "a an the of to in on at for and or is are was were be been being it this that "
+    "i you he she we they me my our your do does did how what why when where which "
+    "with as by from about into over than then so if can could should would will "
+    "not no yes s t re ve ll m don isn".split()
+)
+
+
+def _titan_tokens(text: str) -> list:
+    toks = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return [t for t in toks if len(t) > 1 and t not in _TITAN_STOP]
+
+
+def _titan_vec(tokens: list) -> dict:
+    v: dict = {}
+    for t in tokens:
+        v[t] = v.get(t, 0) + 1
+    return v
+
+
+def _titan_cos(a: dict, b: dict) -> float:
+    if not a or not b:
+        return 0.0
+    common = set(a) & set(b)
+    if not common:
+        return 0.0
+    dot = sum(a[t] * b[t] for t in common)
+    na = math.sqrt(sum(x * x for x in a.values()))
+    nb = math.sqrt(sum(x * x for x in b.values()))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def titan_stats() -> dict:
+    data = _load_json(TITAN_FILE, [])
+    return {
+        "version": TITAN_VERSION,
+        "learned": len(data),
+        "recalls": sum(int(e.get("hits", 0)) for e in data),
+        "enabled": True,
+    }
+
+
+def titan_learn(question: str, answer: str) -> None:
+    """Train Titan on one Q→A pair (called after every OpenAI answer)."""
+    q, a = (question or "").strip(), (answer or "").strip()
+    if not q or len(a) < 2:
+        return
+    toks = _titan_tokens(q)
+    if not toks:
+        return
+    qv = _titan_vec(toks)
+    with _TITAN_LOCK:
+        data = _load_json(TITAN_FILE, [])
+        for e in data:                 # refresh a near-duplicate question in place
+            if _titan_cos(qv, _titan_vec(_titan_tokens(e.get("q", "")))) >= 0.9:
+                e["a"], e["ts"] = a, int(time.time())
+                _save_json(TITAN_FILE, data)
+                return
+        data.append({"q": q, "a": a, "ts": int(time.time()), "hits": 0})
+        if len(data) > TITAN_MAX:
+            data = data[-TITAN_MAX:]
+        _save_json(TITAN_FILE, data)
+
+
+def titan_recall(question: str) -> dict | None:
+    """Ask Titan to answer from what it has learned (used when OpenAI is down)."""
+    toks = _titan_tokens(question)
+    if not toks:
+        return None
+    qv = _titan_vec(toks)
+    data = _load_json(TITAN_FILE, [])
+    best, best_s = None, 0.0
+    for e in data:
+        s = _titan_cos(qv, _titan_vec(_titan_tokens(e.get("q", ""))))
+        if s > best_s:
+            best_s, best = s, e
+    if best and best_s >= TITAN_RECALL_MIN:
+        with _TITAN_LOCK:              # count the recall
+            data2 = _load_json(TITAN_FILE, [])
+            for e in data2:
+                if e.get("q") == best.get("q"):
+                    e["hits"] = int(e.get("hits", 0)) + 1
+                    break
+            _save_json(TITAN_FILE, data2)
+        return {"answer": best.get("a", ""), "score": round(best_s, 3), "matched": best.get("q", "")}
+    return None
 
 
 def openai_chat(messages: list, system: str | None = None) -> dict:
@@ -2557,7 +2660,11 @@ NOT FINANCIAL ADVICE.
                 "voice_enabled": bool(OPENAI_API_KEY),
                 "tts_voice": TTS_VOICE,
                 "dataProvider": market_provider(),
+                "titan": titan_stats(),
             })
+
+        if path == "/api/titan":
+            return self._json(titan_stats())
 
         if path == "/api/adviser":
             return self._json({"text": load_adviser()})
@@ -3286,13 +3393,28 @@ NOT FINANCIAL ADVICE.
                 except Exception:  # noqa: BLE001
                     pass
 
+            user_q = next((m.get("content", "") for m in reversed(messages)
+                           if m.get("role") == "user"), "")
             result = openai_chat(messages, system=system)
             if "error" in result:
+                # OpenAI unavailable — let Titan answer from what it has learned.
+                recall = titan_recall(user_q)
+                if recall:
+                    return self._json({
+                        "text": recall["answer"],
+                        "model": TITAN_VERSION,
+                        "source": "titan",
+                        "titan": {**titan_stats(), "matched": recall["matched"], "score": recall["score"]},
+                    })
                 return self._json(result, 502)
             record_cost(chat_cost(result))
+            text = extract_text(result)
+            titan_learn(user_q, text)          # Titan trains on every OpenAI answer
             return self._json({
-                "text": extract_text(result),
+                "text": text,
                 "model": result.get("model", OPENAI_MODEL),
+                "source": "openai",
+                "titan": titan_stats(),
             })
 
         if path == "/api/analyze":

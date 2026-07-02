@@ -372,11 +372,20 @@ async function checkHealth() {
     const r = await fetch("/api/health");
     const data = await r.json();
     state.aiEnabled = !!data.ai_enabled;
+    state.titan = data.titan || {};
     const status = $("#aiStatus");
     const wrap = status.closest(".status");
+    const learned = state.titan.learned || 0;
+    const titanName = state.titan.version || "Titan 1.1 Beta";
+    const titanTag = learned > 0 ? ` · ${titanName} learned ${learned}` : "";
     if (data.ai_enabled) {
-      status.textContent = "AI online";
-      wrap.classList.add("live");
+      status.textContent = "AI online" + titanTag;
+      status.title = learned > 0 ? `${titanName} has learned ${learned} answers from your OpenAI key` : "";
+      wrap.classList.remove("off"); wrap.classList.add("live");
+    } else if (learned > 0) {
+      status.textContent = `${titanName} ready (${learned} learned)`;
+      status.title = "OpenAI is off — Titan answers from what it learned";
+      wrap.classList.remove("off"); wrap.classList.add("live");
     } else {
       status.textContent = "AI offline — set API key";
       wrap.classList.add("off");
@@ -1945,7 +1954,13 @@ async function sendChat(text, opts = { openDialog: true }) {
       loadingEl.textContent = `${data.error}${data.detail ? "\n" + data.detail : ""}`;
       return;
     }
-    loadingEl.textContent = data.text;
+    if (data.source === "titan") {
+      loadingEl.classList.add("titan");
+      loadingEl.title = `Answered by ${(data.titan && data.titan.version) || "Titan 1.1 Beta"} — learned locally, OpenAI is offline`;
+      loadingEl.textContent = "⚡ " + data.text;
+    } else {
+      loadingEl.textContent = data.text;
+    }
     state.chatHistory.push({ role: "assistant", content: data.text });
   } catch (e) {
     loadingEl.classList.add("err");
