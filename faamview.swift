@@ -132,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKUI
     func promptForKey() -> String? {
         let a = NSAlert()
         a.messageText = "Welcome to FAAM"
-        a.informativeText = "Paste your OpenAI API key (sk-...).\nStored only on this Mac at ~/.faam/key."
+        a.informativeText = "Paste your FAAM AI key.\nStored only on this Mac at ~/.faam/key."
         a.addButton(withTitle: "Start")
         a.addButton(withTitle: "Quit")
         let f = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))

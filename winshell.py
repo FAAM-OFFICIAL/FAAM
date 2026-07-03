@@ -31,7 +31,7 @@ KEY_FILE = FAAM_DIR / "key"
 
 
 def disk_key():
-    """The OpenAI key from the environment or a previous run (~/.faam/key)."""
+    """The FAAM AI key from the environment or a previous run (~/.faam/key)."""
     env = os.environ.get("OPENAI_API_KEY")
     if env and env.strip():
         return env.strip()
@@ -45,7 +45,7 @@ def disk_key():
 
 
 def prompt_key():
-    """First-run prompt for the OpenAI key (tkinter ships with Python)."""
+    """First-run prompt for the FAAM AI key (tkinter ships with Python)."""
     try:
         import tkinter as tk
         from tkinter import simpledialog
@@ -53,7 +53,7 @@ def prompt_key():
         root.withdraw()
         val = simpledialog.askstring(
             "Welcome to FAAM",
-            "Optional: paste your OpenAI API key (sk-...) to enable the AI "
+            "Optional: paste your FAAM AI key to enable the AI "
             "assistant.\nLeave blank to skip — the dashboard works without it.\n"
             "Stored only on this PC at %USERPROFILE%\\.faam\\key.",
             show="*",

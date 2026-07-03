@@ -22,7 +22,7 @@ const state = {
   beginner: false,          // beginner mode (guided tour + plain-language tips)
   gameOn: false,            // Game of Stocks mode
   game: null,               // game state from /api/game
-  aiEnabled: false,         // server has an OpenAI key (from /api/health)
+  aiEnabled: false,         // server has an AI key (from /api/health)
   aiControl: false,         // user let the assistant drive the dashboard (fill orders)
 };
 
@@ -445,21 +445,21 @@ async function checkHealth() {
     const titanTag = learned > 0 ? ` · ${titanName} learned ${learned}` : "";
     if (data.ai_enabled) {
       status.textContent = "AI online" + titanTag;
-      status.title = learned > 0 ? `${titanName} has learned ${learned} answers from your OpenAI key` : "";
+      status.title = learned > 0 ? `${titanName} has learned ${learned} answers` : "";
       wrap.classList.remove("off"); wrap.classList.add("live");
     } else if (learned > 0) {
       status.textContent = `${titanName} ready (${learned} learned)`;
-      status.title = "OpenAI is off — Titan answers from what it learned";
+      status.title = "AI is off — Titan answers from what it learned";
       wrap.classList.remove("off"); wrap.classList.add("live");
     } else {
-      status.textContent = "AI offline — set API key";
+      status.textContent = "AI offline";
       wrap.classList.add("off");
     }
     setAdviserActive(!!data.adviser_loaded);
     const vb = $("#voiceBtn");
     if (vb) {
       vb.disabled = !data.voice_enabled;
-      vb.title = data.voice_enabled ? "Voice mode — talk to FAAM" : "Voice needs an OpenAI API key";
+      vb.title = data.voice_enabled ? "Voice mode — talk to FAAM" : "Voice is unavailable right now";
     }
   } catch {
     $("#aiStatus").textContent = "server unreachable";
@@ -1390,7 +1390,7 @@ function toggleGame() {
 }
 
 /* ---------- AI control of the dashboard (permission-gated) ----------
-   With your OpenAI key, the assistant can take a plain-English request, open
+   The assistant can take a plain-English request, open
    the right stock, and FILL an order ticket for you. It asks for permission the
    first time, and it still NEVER places a trade or moves money — you review and
    submit at your broker. */
@@ -1481,7 +1481,7 @@ async function runAiOrder(text) {
     if (!r.ok || d.error) {
       loadingEl.classList.remove("loading");
       let msg = (d && d.error) || "I couldn't read that as an order. Try “buy $500 of Apple”.";
-      if (!state.aiEnabled) msg += " (Tip: add your OpenAI API key for free-form requests.)";
+      if (!state.aiEnabled) msg += "";
       loadingEl.textContent = msg;
       state.chatHistory.push({ role: "assistant", content: msg });
       return;
@@ -2021,7 +2021,7 @@ async function sendChat(text, opts = { openDialog: true }) {
     }
     if (data.source === "titan") {
       loadingEl.classList.add("titan");
-      loadingEl.title = `Answered by ${(data.titan && data.titan.version) || "Titan 1.1 Beta"} — learned locally, OpenAI is offline`;
+      loadingEl.title = `Answered by ${(data.titan && data.titan.version) || "Titan 1.1 Beta"} — learned locally, AI is offline`;
       loadingEl.textContent = "⚡ " + data.text;
     } else {
       loadingEl.textContent = data.text;

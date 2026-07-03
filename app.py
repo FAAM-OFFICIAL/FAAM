@@ -69,8 +69,8 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
     {"version": "1.6", "date": "2026-07-02", "title": "Meet Titan 1.1 Beta", "items": [
-        {"tag": "new", "text": "Titan 1.1 Beta — a local model that learns from every question you ask while your OpenAI key is working."},
-        {"tag": "new", "text": "Titan recalls answers on its own for similar questions and can stand in when OpenAI is unavailable."},
+        {"tag": "new", "text": "Titan 1.1 Beta — FAAM's own model that learns from every answer the assistant gives."},
+        {"tag": "new", "text": "Chat with Titan directly, and teach it when it doesn't know — it grows over time and can answer on its own."},
         {"tag": "improved", "text": "Licensed market data (Massive.com) with graceful fallback; more reliable HTTPS."},
     ]},
     {"version": "1.5", "date": "2026-06-20", "title": "Free for everyone — beta", "items": [
@@ -98,6 +98,7 @@ CHANGELOG = [
     ]},
 ]
 ROADMAP = [
+    {"title": "Beginner Mode course", "text": "Beginner Mode will soon have a full course for people to learn stocks on."},
     {"title": "Mock Stock Trading", "text": "Learn to trade — practice with virtual money, risk-free."},
     {"title": "Juno", "text": "A deep model trained on historical stock data — in training now."},
     {"title": "FAAM in the cloud", "text": "Use FAAM in any browser with nothing to install."},
@@ -138,7 +139,7 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-# Voice mode (speech-to-text + text-to-speech), all via the same OpenAI key.
+# Voice mode (speech-to-text + text-to-speech), all via the same FAAM AI key.
 STT_MODEL = os.environ.get("FAAM_STT_MODEL", "whisper-1")
 TTS_MODEL = os.environ.get("FAAM_TTS_MODEL", "tts-1")
 TTS_VOICE = os.environ.get("FAAM_TTS_VOICE", "alloy")
@@ -342,8 +343,8 @@ def save_stripe_key(key: str) -> bool:
 # ---------- Accounts & sessions ----------
 def load_users() -> dict:
     u = _load_json(USERS_FILE, {})
-    return u if isinstance(u, dict) else {}
-
+    return u if isinstance(u, dict) else {} 
+  
 
 def save_users(users: dict) -> bool:
     return _save_json(USERS_FILE, users)
@@ -933,16 +934,10 @@ def _quote_massive(symbol: str, range_: str = "1mo", interval: str = "1d") -> di
 
 
 def market_provider() -> str:
-    """Which data source is active. Explicit env wins; else auto-pick a licensed
-    provider when its key is set; else fall back to Yahoo (dev only)."""
+    """Which data source is active. Yahoo by default; set MARKET_DATA_PROVIDER
+    explicitly (e.g. on a hosted server) to use a licensed provider instead."""
     if MARKET_DATA_PROVIDER in ("yahoo", "alphavantage", "finnhub", "massive"):
         return MARKET_DATA_PROVIDER
-    if massive_key():
-        return "massive"
-    if FINNHUB_API_KEY:
-        return "finnhub"
-    if ALPHAVANTAGE_API_KEY:
-        return "alphavantage"
     return "yahoo"
 
 
@@ -1307,7 +1302,7 @@ def _parse_json_obj(text: str) -> dict:
 # Titan is a lightweight, pure-Python learning layer (no ML libraries): it records
 # every question and its OpenAI answer, indexes them by term-frequency similarity,
 # and can recall an answer on its own for a close future question. It gets better
-# the more FAAM is used, and stands in when the OpenAI key is unavailable.
+# the more FAAM is used, and stands in when the FAAM AI key is unavailable.
 TITAN_VERSION = "Titan 1.1 Beta"
 TITAN_FILE = DATA_DIR / "titan.json"
 TITAN_MAX = 800            # rolling cap on learned entries
@@ -1404,7 +1399,7 @@ def titan_recall(question: str) -> dict | None:
 def openai_chat(messages: list, system: str | None = None) -> dict:
     """Call OpenAI chat completions API."""
     if not OPENAI_API_KEY:
-        return {"error": "OPENAI_API_KEY not set on the server."}
+        return {"error": "The AI is not available right now."}
 
     # OpenAI puts the system prompt as the first message in the array.
     full_messages = []
@@ -1432,7 +1427,7 @@ def openai_chat(messages: list, system: str | None = None) -> dict:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")
-        return {"error": f"OpenAI API error {e.code}", "detail": detail}
+        return {"error": f"AI service error {e.code}", "detail": detail}
     except urllib.error.URLError as e:
         return {"error": f"network error: {e.reason}"}
 
@@ -1531,7 +1526,7 @@ def _multipart(fields: dict, file_field: str, filename: str,
 def openai_transcribe(audio: bytes, ext: str, content_type: str) -> dict:
     """Speech-to-text via OpenAI audio transcriptions (Whisper)."""
     if not OPENAI_API_KEY:
-        return {"error": "OPENAI_API_KEY not set on the server."}
+        return {"error": "The AI is not available right now."}
     boundary, body = _multipart(
         {"model": STT_MODEL, "response_format": "json"},
         "file", f"audio.{ext}", audio, content_type or "application/octet-stream",
@@ -1549,7 +1544,7 @@ def openai_transcribe(audio: bytes, ext: str, content_type: str) -> dict:
         with urllib.request.urlopen(req, timeout=120) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
-        return {"error": f"OpenAI transcription error {e.code}",
+        return {"error": f"Voice transcription error {e.code}",
                 "detail": e.read().decode("utf-8", errors="replace")}
     except urllib.error.URLError as e:
         return {"error": f"network error: {e.reason}"}
@@ -1558,7 +1553,7 @@ def openai_transcribe(audio: bytes, ext: str, content_type: str) -> dict:
 def openai_tts(text: str, voice: str = TTS_VOICE):
     """Text-to-speech via OpenAI audio speech. Returns (audio_bytes, error)."""
     if not OPENAI_API_KEY:
-        return None, {"error": "OPENAI_API_KEY not set on the server."}
+        return None, {"error": "The AI is not available right now."}
     payload = {
         "model": TTS_MODEL,
         "voice": voice or TTS_VOICE,
@@ -1578,7 +1573,7 @@ def openai_tts(text: str, voice: str = TTS_VOICE):
         with urllib.request.urlopen(req, timeout=120) as r:
             return r.read(), None
     except urllib.error.HTTPError as e:
-        return None, {"error": f"OpenAI TTS error {e.code}",
+        return None, {"error": f"Voice playback error {e.code}",
                       "detail": e.read().decode("utf-8", errors="replace")}
     except urllib.error.URLError as e:
         return None, {"error": f"network error: {e.reason}"}
@@ -1702,7 +1697,7 @@ def _game_claim(username: str) -> dict:
 #      python3 and only accept one that actually runs.
 #   2. The browser used to open BEFORE the server was listening -> "can't reach
 #      this page". We now wait for /api/health, then open the browser.
-#   3. It demanded an OpenAI key to start. The dashboard runs fine without one,
+#   3. It demanded an FAAM AI key to start. The dashboard runs fine without one,
 #      so the key is now optional (only the AI assistant needs it).
 WIN_BAT = """@echo off
 setlocal enabledelayedexpansion
@@ -1730,15 +1725,15 @@ if not defined PYEXE (
   exit /b 1
 )
 
-REM --- Optional OpenAI key (enables the AI assistant; app runs without it) ---
+REM --- Optional FAAM AI key (enables the AI assistant; app runs without it) ---
 set "FAAM_DIR=%USERPROFILE%\\.faam"
 set "FAAM_KEY=%FAAM_DIR%\\key"
 if not defined OPENAI_API_KEY if exist "%FAAM_KEY%" set /p OPENAI_API_KEY=<"%FAAM_KEY%"
 if not defined OPENAI_API_KEY (
   echo.
-  echo   Optional: paste an OpenAI API key to switch on the AI assistant.
+  echo   Optional: paste a FAAM AI key to switch on the AI assistant.
   echo   Press Enter to skip - the dashboard works fully without it.
-  set /p OPENAI_API_KEY="OpenAI key (or blank): "
+  set /p OPENAI_API_KEY="FAAM AI key (or blank): "
 )
 if defined OPENAI_API_KEY (
   if not exist "%FAAM_DIR%" mkdir "%FAAM_DIR%" >nul 2>nul
@@ -1770,7 +1765,7 @@ QUICK START
    Create an account or sign in, and you're in.
 
 That's it - FAAM runs locally on your PC and you use it in your browser.
-You do NOT need an OpenAI key; add one only if you want the AI assistant
+You do NOT need an FAAM AI key; add one only if you want the AI assistant
 (you can paste it when the launcher asks, or just press Enter to skip).
 
 TROUBLESHOOTING
@@ -1829,12 +1824,12 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "  Arch:           sudo pacman -S python"
   exit 1
 fi
-# OpenAI key (optional): from the environment, a previous run, or a prompt.
+# FAAM AI key (optional): from the environment, a previous run, or a prompt.
 if [ -z "$OPENAI_API_KEY" ] && [ -f "$HOME/.faam/key" ]; then
   OPENAI_API_KEY="$(cat "$HOME/.faam/key")"; export OPENAI_API_KEY
 fi
 if [ -z "$OPENAI_API_KEY" ]; then
-  printf 'Paste your OpenAI API key (sk-...), or press Enter to skip: '
+  printf 'Paste your FAAM AI key, or press Enter to skip: '
   read -r KEY
   if [ -n "$KEY" ]; then
     mkdir -p "$HOME/.faam"; printf '%s' "$KEY" > "$HOME/.faam/key"
@@ -1897,7 +1892,7 @@ QUICK START
   1) Check Python 3 is installed:   python3 --version
   2) From this folder, run:         ./run-faam.sh
         (or, if it isn't executable:  bash run-faam.sh)
-  3) Paste your OpenAI API key if asked — optional, stored at ~/.faam/key.
+  3) Paste your FAAM AI key if asked — optional, stored at ~/.faam/key.
   4) Your browser opens to FAAM. Create an account or sign in, and you're in.
 
 ADD TO YOUR APPS MENU (optional)
@@ -1947,7 +1942,7 @@ def build_linux_tar() -> bytes:
 
 # ---------- Natural-language order parsing (AI fills the investing form) ----------
 # Common company / asset names → US tickers, so "buy $500 of apple" resolves with
-# no AI call. When an OpenAI key is set, the endpoint also falls back to the model.
+# no AI call. When an FAAM AI key is set, the endpoint also falls back to the model.
 COMPANY_TICKERS = {
     "apple": "AAPL", "microsoft": "MSFT", "tesla": "TSLA", "nvidia": "NVDA",
     "amazon": "AMZN", "google": "GOOGL", "alphabet": "GOOGL", "meta": "META",
@@ -2288,6 +2283,15 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        # Keep the app shell fresh in the native WebView so updates (new buttons,
+        # fixes) always apply instead of loading a stale cached copy. /api/*
+        # responses set their own Cache-Control and are left alone.
+        p = (self.path or "").split("?")[0]
+        if not p.startswith("/api/") and (
+            p in ("/", "/login", "/dashboard", "/signup", "/browserversion")
+            or p.endswith((".js", ".css", ".html"))
+        ):
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
         super().end_headers()
 
     def _json(self, obj, status: int = 200, set_cookie: str | None = None) -> None:
@@ -2480,7 +2484,7 @@ if [ -z "$OPENAI_API_KEY" ]; then
 try
   set dlg to display dialog "Welcome to FAAM.
 
-Paste your OpenAI API key (sk-...). Stored only on this Mac at ~/.faam/key." default answer "" with hidden answer with title "FAAM" buttons {"Cancel","Start"} default button "Start"
+Paste your FAAM AI key. Stored only on this Mac at ~/.faam/key." default answer "" with hidden answer with title "FAAM" buttons {"Cancel","Start"} default button "Start"
   return text returned of dlg
 on error
   return ""
@@ -2538,7 +2542,7 @@ exec /usr/bin/env python3 app.py
 QUICK START
 1) Drag FAAM.app into your Applications folder.
 2) Double-click FAAM.app to launch.
-3) On first run you'll be prompted to paste your OpenAI API key.
+3) On first run you'll be prompted to paste your FAAM AI key.
    The key is stored only on this Mac (~/.faam/key, mode 600).
 4) Your browser will open to the dashboard automatically.
 
@@ -2551,7 +2555,7 @@ developer." This happens for any unsigned app. To open it once:
 REQUIREMENTS
   - macOS 10.12 or later
   - Python 3.9+ (preinstalled on modern macOS)
-  - An OpenAI API key (https://platform.openai.com/api-keys)
+  - An FAAM AI key (https://platform.openai.com/api-keys)
 
 CHANGING YOUR API KEY
   Edit or delete the file:  ~/.faam/key
@@ -3172,7 +3176,7 @@ NOT FINANCIAL ADVICE.
 
         if path == "/api/order/parse":
             # Turn plain English ("buy $500 of Apple") into the order-form fields.
-            # Heuristic first (no key needed); falls back to the OpenAI key when set.
+            # Heuristic first (no key needed); falls back to the FAAM AI key when set.
             # This only FILLS the form — FAAM still never places the trade.
             body = self._read_json()
             text = (body.get("text") or "").strip()
@@ -3533,7 +3537,7 @@ def main() -> None:
     print(banner)
     if OPENAI_API_KEY:
         masked = OPENAI_API_KEY[:7] + "…" + OPENAI_API_KEY[-4:]
-        print(f"   ✓ OpenAI key loaded ({masked})")
+        print(f"   ✓ FAAM AI key loaded ({masked})")
     else:
         print("   ⚠ OPENAI_API_KEY not set — AI features disabled.")
         print("     export OPENAI_API_KEY=sk-...")
