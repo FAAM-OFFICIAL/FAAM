@@ -1316,9 +1316,25 @@ _TITAN_STOP = frozenset(
 )
 
 
+def _titan_stem(t: str) -> str:
+    """Very light stemmer so 'investing'/'invests'/'invested' → 'invest',
+    'stocks' → 'stock', 'losses' → 'loss'. Improves matching a lot."""
+    # Words ending in 'ss'/'us'/'is' (loss, class, status) keep their tail —
+    # only strip true verb suffixes, never the terminal 's'.
+    if t.endswith(("ss", "us", "is")):
+        for suf in ("ing", "ed", "ly"):
+            if t.endswith(suf) and len(t) - len(suf) >= 3:
+                return t[: -len(suf)]
+        return t
+    for suf in ("ing", "ies", "ed", "es", "er", "ly", "s"):
+        if t.endswith(suf) and len(t) - len(suf) >= 3:
+            return t[: -len(suf)] + ("y" if suf == "ies" else "")
+    return t
+
+
 def _titan_tokens(text: str) -> list:
     toks = re.findall(r"[a-z0-9]+", (text or "").lower())
-    return [t for t in toks if len(t) > 1 and t not in _TITAN_STOP]
+    return [_titan_stem(t) for t in toks if len(t) > 1 and t not in _TITAN_STOP]
 
 
 def _titan_vec(tokens: list) -> dict:
@@ -1340,11 +1356,82 @@ def _titan_cos(a: dict, b: dict) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
+# Built-in knowledge so Titan is useful out of the box. Users teach it more on
+# top of this; a taught answer that closely matches a question overrides a seed.
+TITAN_SEED = [
+    # ── Investing basics ──────────────────────────────────────────────
+    {"q": "what is a stock", "a": "A stock is a share of ownership in a company. Owning one means you own a small slice of that business, including a claim on its future profits."},
+    {"q": "what is a share", "a": "A share is a single unit of ownership in a company. If a company has 1 million shares and you own 1,000, you own 0.1% of it."},
+    {"q": "what is the stock market", "a": "The stock market is where buyers and sellers trade shares of public companies. Prices move with supply, demand, news, and expectations about the future."},
+    {"q": "what is an ETF", "a": "An ETF (exchange-traded fund) holds a basket of many stocks or assets and trades like a single stock. It's a simple way to get instant diversification — SPY tracks the S&P 500, for example."},
+    {"q": "what is an index fund", "a": "An index fund tracks a whole market index (like the S&P 500) instead of picking stocks. It's low-cost, diversified, and a common core long-term holding."},
+    {"q": "what is a dividend", "a": "A dividend is a share of a company's profits paid out to shareholders, usually quarterly. Not all companies pay them — many growth companies reinvest instead."},
+    {"q": "what is market cap", "a": "Market cap is a company's total value: share price times the number of shares. It sorts companies into large-cap, mid-cap, and small-cap."},
+    {"q": "what is a pe ratio", "a": "The P/E (price-to-earnings) ratio is the share price divided by earnings per share. A high P/E means investors expect strong growth; a low P/E can mean value or trouble."},
+    {"q": "what is eps", "a": "EPS (earnings per share) is a company's profit divided by its number of shares — a quick measure of how much it earns for each share you own."},
+    {"q": "what is a bull market", "a": "A bull market is a sustained period of rising prices and optimism. 'Bullish' means you expect prices to go up."},
+    {"q": "what is a bear market", "a": "A bear market is a sustained decline, usually 20% or more from recent highs. 'Bearish' means you expect prices to fall."},
+    {"q": "what is a recession", "a": "A recession is a broad, sustained decline in economic activity. Stocks often fall ahead of and during recessions, then tend to recover before the economy fully does."},
+    # ── Strategy & risk ───────────────────────────────────────────────
+    {"q": "what is diversification", "a": "Diversification means spreading money across many investments so no single loss can sink you. It's the closest thing to a free lunch in investing."},
+    {"q": "what does it mean to diversify", "a": "To diversify is to spread your money across many different investments so that no single loss can sink you — the closest thing to a free lunch in investing."},
+    {"q": "what is dollar cost averaging", "a": "Dollar-cost averaging is investing a fixed amount on a regular schedule regardless of price. It smooths out volatility and removes the pressure to time the market."},
+    {"q": "should i time the market", "a": "Timing the market consistently is extremely hard, even for pros. Most investors do better staying invested and buying regularly. This isn't financial advice."},
+    {"q": "what is compound interest", "a": "Compounding is earning returns on your past returns. Over years it snowballs — which is why starting early matters more than starting big."},
+    {"q": "how much should i invest", "a": "A common rule of thumb: only invest money you won't need for several years, keep an emergency fund in cash first, and never invest more than you can afford to lose. Not financial advice."},
+    {"q": "what is a good long term stock", "a": "There's no single answer, but many long-term investors favor low-cost, broad index funds (like an S&P 500 ETF) as a core holding. Not financial advice — do your own research."},
+    {"q": "what is risk management", "a": "Risk management is protecting your capital: diversifying, sizing positions sensibly, using stop-losses, and never betting more than you can afford to lose."},
+    {"q": "what is a portfolio", "a": "A portfolio is your entire collection of investments — stocks, ETFs, bonds, cash — considered together. FAAM lets you track one in the Portfolio panel."},
+    # ── Trading mechanics ─────────────────────────────────────────────
+    {"q": "what does it mean to go long", "a": "Going long means buying an asset expecting its price to rise, so you profit as it goes up. It's the normal way most people invest."},
+    {"q": "what does shorting mean", "a": "Shorting means betting a stock will fall: you borrow shares, sell them, and aim to buy back cheaper. Losses are theoretically unlimited, so it's high risk."},
+    {"q": "what is a market order", "a": "A market order buys or sells immediately at the best available price. It's fast but you don't control the exact price you get."},
+    {"q": "what is a limit order", "a": "A limit order only executes at your set price or better. You control the price, but the trade may not fill if the market never reaches it."},
+    {"q": "what is a stop loss", "a": "A stop-loss automatically sells a position if it falls to a set price, capping your loss. It's a core risk-management tool."},
+    {"q": "what is bid and ask", "a": "The bid is the highest price a buyer will pay; the ask is the lowest a seller will accept. The gap between them is the spread."},
+    {"q": "what is volume", "a": "Volume is how many shares traded in a period. High volume means strong interest and usually more reliable price moves."},
+    {"q": "what is volatility", "a": "Volatility is how much and how fast a price swings. Higher volatility means bigger potential gains and losses."},
+    {"q": "what is liquidity", "a": "Liquidity is how easily you can buy or sell without moving the price. Big stocks like Apple are very liquid; tiny stocks may not be."},
+    # ── Charts & indicators ───────────────────────────────────────────
+    {"q": "what is a candlestick", "a": "A candlestick shows the open, high, low, and close for a period. A green candle closed above its open; red closed below. FAAM has a Candles view."},
+    {"q": "how do i read a candle chart", "a": "Each candle shows the open, high, low, and close for a period. The body spans open-to-close (green if it closed up, red if down) and the thin wicks show the high and low. Switch to the Candles view in FAAM to see them."},
+    {"q": "what is a moving average", "a": "A moving average smooths price into a trend line over a set number of days (e.g. SMA 20 or 50). Crossovers are watched as trend signals."},
+    {"q": "what is rsi", "a": "RSI (Relative Strength Index) measures momentum from 0–100. Above 70 is often called overbought, below 30 oversold — signals, not certainties."},
+    {"q": "what is support and resistance", "a": "Support is a price level where buyers tend to step in; resistance is where sellers do. Prices often bounce between them until one breaks."},
+    {"q": "what is a 52 week high", "a": "The 52-week high and low are the highest and lowest prices a stock hit over the past year — a quick sense of its recent range."},
+    # ── FAAM-specific ─────────────────────────────────────────────────
+    {"q": "what is faam", "a": "FAAM (Financial AI Agent Manager) is a market dashboard with a built-in AI analyst. It shows quotes, charts, forecasts and insights — and it never places trades for you."},
+    {"q": "does faam trade for me", "a": "No. FAAM never places trades or moves money. It can prepare an order ticket from your chat, but you review and place it yourself."},
+    {"q": "is faam financial advice", "a": "No. FAAM is an information and research tool, not financial advice. Always do your own research and consider a licensed advisor for big decisions."},
+    {"q": "who is titan", "a": "Titan is FAAM's own model. It learns from every answer the assistant gives and from what you teach it, so it gets smarter the more FAAM is used."},
+    {"q": "how do i add a stock to my watchlist", "a": "Use the 'Add to watchlist' button at the bottom of the dashboard, or type a ticker into search. Your watchlist appears as cards along the top."},
+    {"q": "how do i track my portfolio", "a": "Open the Portfolio panel and click '+ Add position', then enter the ticker, shares, and your average cost. FAAM shows live value and profit or loss."},
+    {"q": "how do i teach titan", "a": "Open Titan and ask a question. If it doesn't know, it shows a box where you type the answer — teach it once and it remembers next time."},
+    {"q": "is my data private", "a": "Your keys and data are stored locally on your device. FAAM doesn't sell your data. See the Privacy page for details."},
+    # ── Common questions ──────────────────────────────────────────────
+    {"q": "should i buy this stock", "a": "I can't tell you what to buy — that depends on your goals, timeline, and risk tolerance. Look at the fundamentals, the trend, and never invest more than you can afford to lose. Not financial advice."},
+    {"q": "will the stock go up", "a": "Nobody can reliably predict short-term prices — if they could, they'd be very rich. Focus on solid companies or diversified funds and a long time horizon. Not financial advice."},
+    {"q": "what stock should i buy", "a": "That depends on you, not on any single 'best' stock. Beginners often start with a broad, low-cost index fund and add individual names as they learn. Not financial advice."},
+    {"q": "how do beginners start investing", "a": "Start small: build an emergency fund, open a brokerage account, and consider a low-cost index fund with money you won't need for years. Learn as you go. Not financial advice."},
+    {"q": "how do i begin investing", "a": "Start small: build an emergency fund first, open a brokerage account, and consider a low-cost index fund with money you won't need for a while. Learn as you go. Not financial advice."},
+    {"q": "what is a broker", "a": "A broker is the platform or firm you use to buy and sell investments — like Robinhood, Fidelity, or Schwab. FAAM helps you research; you trade at your broker."},
+    {"q": "what is capital gains tax", "a": "Capital gains tax is owed on profit when you sell an investment for more than you paid. Holding longer than a year often qualifies for a lower rate. Check your local rules."},
+    {"q": "what is a 401k", "a": "A 401(k) is a tax-advantaged retirement account offered by employers, often with matching contributions. The match is essentially free money worth capturing."},
+    {"q": "what is inflation", "a": "Inflation is the general rise in prices over time, which erodes cash's buying power. Investing is one way people try to grow money faster than inflation."},
+    {"q": "hello", "a": "Hi! I'm Titan, FAAM's built-in model. Ask me about stocks, investing, or how to use FAAM — and teach me anything I don't know yet."},
+    {"q": "what can you do", "a": "I answer questions about investing, stock terms, and how FAAM works, using what I've learned. If I don't know something, teach me and I'll remember it."},
+    {"q": "thank you", "a": "You're welcome! Ask me anything else, or teach me something new so I keep getting smarter."},
+]
+_TITAN_SEED_INDEX = [(e["q"], e["a"], _titan_vec(_titan_tokens(e["q"]))) for e in TITAN_SEED]
+
+
 def titan_stats() -> dict:
     data = _load_json(TITAN_FILE, [])
     return {
         "version": TITAN_VERSION,
         "learned": len(data),
+        "seeded": len(TITAN_SEED),
+        "knowledge": len(data) + len(TITAN_SEED),
         "recalls": sum(int(e.get("hits", 0)) for e in data),
         "enabled": True,
     }
@@ -1373,27 +1460,57 @@ def titan_learn(question: str, answer: str) -> None:
 
 
 def titan_recall(question: str) -> dict | None:
-    """Ask Titan to answer from what it has learned (used when OpenAI is down)."""
+    """Answer from Titan's built-in knowledge + what users have taught it. A
+    close taught answer beats a seed, so corrections and new topics win."""
     toks = _titan_tokens(question)
     if not toks:
         return None
     qv = _titan_vec(toks)
+    best_q, best_a, best_s, from_learned = None, None, 0.0, False
+    # 1) built-in knowledge (precomputed vectors)
+    for q, a, v in _TITAN_SEED_INDEX:
+        s = _titan_cos(qv, v)
+        if s > best_s:
+            best_s, best_q, best_a, from_learned = s, q, a, False
+    # 2) taught answers (can override a seed with a closer match)
     data = _load_json(TITAN_FILE, [])
-    best, best_s = None, 0.0
     for e in data:
         s = _titan_cos(qv, _titan_vec(_titan_tokens(e.get("q", ""))))
         if s > best_s:
-            best_s, best = s, e
-    if best and best_s >= TITAN_RECALL_MIN:
-        with _TITAN_LOCK:              # count the recall
-            data2 = _load_json(TITAN_FILE, [])
-            for e in data2:
-                if e.get("q") == best.get("q"):
-                    e["hits"] = int(e.get("hits", 0)) + 1
-                    break
-            _save_json(TITAN_FILE, data2)
-        return {"answer": best.get("a", ""), "score": round(best_s, 3), "matched": best.get("q", "")}
+            best_s, best_q, best_a, from_learned = s, e.get("q", ""), e.get("a", ""), True
+    if best_a is not None and best_s >= TITAN_RECALL_MIN:
+        if from_learned:
+            with _TITAN_LOCK:          # count recalls of taught answers
+                data2 = _load_json(TITAN_FILE, [])
+                for e in data2:
+                    if e.get("q") == best_q:
+                        e["hits"] = int(e.get("hits", 0)) + 1
+                        break
+                _save_json(TITAN_FILE, data2)
+        return {"answer": best_a, "score": round(best_s, 3), "matched": best_q,
+                "from": "taught" if from_learned else "knowledge"}
     return None
+
+
+def titan_feedback(question: str, answer: str, good: bool) -> None:
+    """👍 reinforces an answer (Titan remembers it); 👎 forgets a taught answer
+    for that question so it can be corrected."""
+    q = (question or "").strip()
+    if not q:
+        return
+    if good:
+        titan_learn(q, answer)         # keep the good answer as taught knowledge
+        return
+    toks = _titan_tokens(q)
+    if not toks:
+        return
+    qv = _titan_vec(toks)
+    with _TITAN_LOCK:                  # drop a near-matching taught answer
+        data = _load_json(TITAN_FILE, [])
+        kept = [e for e in data
+                if _titan_cos(qv, _titan_vec(_titan_tokens(e.get("q", "")))) < 0.9]
+        if len(kept) != len(data):
+            _save_json(TITAN_FILE, kept)
 
 
 def openai_chat(messages: list, system: str | None = None) -> dict:
@@ -3479,6 +3596,17 @@ NOT FINANCIAL ADVICE.
             if not q or not a:
                 return self._json({"error": "need a question and an answer"}, 400)
             titan_learn(q, a)
+            return self._json({"ok": True, **titan_stats()})
+
+        # Rate a Titan answer: 👍 reinforces it, 👎 forgets it so it can be fixed.
+        if path == "/api/titan/feedback":
+            body = self._read_json()
+            q = (body.get("question") or "").strip()
+            a = (body.get("answer") or "").strip()
+            good = bool(body.get("good"))
+            if not q:
+                return self._json({"error": "missing question"}, 400)
+            titan_feedback(q, a, good)
             return self._json({"ok": True, **titan_stats()})
 
         if path == "/api/analyze":

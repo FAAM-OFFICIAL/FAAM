@@ -200,7 +200,7 @@ function openTitan() {
   loadTitanStat();
   const log = $("#titanLog");
   if (log && !log.children.length) {
-    titanBubble("bot", "Hi, I'm Titan. Ask me anything I've learned from your FAAM answers — and if I don't know, you can teach me so I remember next time.");
+    titanBubble("bot", "Hi, I'm Titan — FAAM's own model. I already know the basics of stocks, investing and how FAAM works. Ask me anything, rate my answers 👍/👎, and teach me whatever I don't know yet.");
   }
 }
 function titanBubble(who, text) {
@@ -216,8 +216,36 @@ async function loadTitanStat() {
   try {
     const d = await (await fetch("/api/titan")).json();
     const el = $("#titanStat");
-    if (el) el.textContent = `${d.version || "Titan 1.1 Beta"} · learned ${d.learned || 0} · ${d.recalls || 0} recalls`;
+    if (el) el.textContent = `${d.version || "Titan 1.1 Beta"} · knows ${d.knowledge || d.learned || 0} things · ${d.learned || 0} taught by you`;
   } catch { /* ignore */ }
+}
+function titanAddFeedback(bubble, question, answer) {
+  const fb = document.createElement("div");
+  fb.className = "titan-fb";
+  fb.innerHTML =
+    '<span class="titan-fb-q">Helpful?</span>' +
+    '<button class="titan-fb-btn" data-good="1" title="Good answer">👍</button>' +
+    '<button class="titan-fb-btn" data-good="0" title="Wrong — teach the right answer">👎</button>';
+  bubble.appendChild(fb);
+  fb.querySelector('[data-good="1"]').addEventListener("click", () => titanFeedback(question, answer, true, fb));
+  fb.querySelector('[data-good="0"]').addEventListener("click", () => titanFeedback(question, answer, false, fb));
+}
+async function titanFeedback(question, answer, good, fbEl) {
+  try {
+    await fetch("/api/titan/feedback", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question, answer, good }),
+    });
+  } catch { /* ignore */ }
+  if (good) {
+    if (fbEl) fbEl.innerHTML = '<span class="titan-fb-done">👍 Thanks — Titan will keep that.</span>';
+  } else {
+    if (fbEl) fbEl.innerHTML = '<span class="titan-fb-done">Teach Titan the right answer below ↓</span>';
+    titanPendingQ = question;
+    $("#titanTeach").hidden = false;
+    setTimeout(() => $("#titanAnswer")?.focus(), 60);
+  }
+  loadTitanStat();
 }
 async function titanAsk(q) {
   titanBubble("you", q);
@@ -231,6 +259,7 @@ async function titanAsk(q) {
     const d = await r.json();
     if (d.known) {
       thinking.textContent = d.answer;
+      titanAddFeedback(thinking, q, d.answer);   // 👍 / 👎 on every answer
     } else {
       thinking.textContent = "I don't know that yet. Can you teach me the answer?";
       titanPendingQ = q;
