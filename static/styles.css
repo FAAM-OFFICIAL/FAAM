@@ -1375,6 +1375,46 @@ body.beginner .beginner-banner.dismissed { display: none; }
 .titan-fb-btn { border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 1px 8px; cursor: pointer; font-size: 13px; line-height: 1.5; }
 .titan-fb-btn:hover { border-color: var(--border-strong); transform: translateY(-1px); }
 .titan-fb-done { font-size: 11px; color: var(--muted); }
+
+/* ---------- Personalized FAAM (Beta) + course ---------- */
+.btn-ghost { padding: 10px 16px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 11px; font-weight: 600; font-size: 13px; cursor: pointer; }
+.btn-ghost:hover { border-color: var(--border-strong); }
+.btn-go { padding: 10px 18px; border: 0; background: var(--primary-bg); color: var(--primary-fg); border-radius: 11px; font-weight: 700; font-size: 13px; cursor: pointer; }
+.btn-go:hover { background: var(--primary-bg-hover); }
+.btn-go:disabled { opacity: .5; cursor: default; }
+.beta-chip, .ai-badge.pers-badge { font-size: 9px; font-weight: 800; letter-spacing: .06em; color: #fff; background: linear-gradient(135deg, #4f8cff, #7c5cff); padding: 2px 6px; border-radius: 999px; vertical-align: middle; }
+.ai-badge.learn-badge { background: var(--green); }
+#courseRow { align-items: center; }
+.consent-list { margin: 12px 0; padding: 0; list-style: none; }
+.consent-list li { position: relative; padding: 7px 0 7px 26px; font-size: 13px; color: var(--text-2); line-height: 1.45; border-bottom: 1px solid var(--border); }
+.consent-list li::before { content: "✓"; position: absolute; left: 3px; top: 7px; color: var(--accent); font-weight: 800; }
+.consent-list li:last-child { border-bottom: 0; }
+.consent-agree { display: flex; gap: 9px; align-items: flex-start; font-size: 13px; color: var(--text); margin: 8px 0 6px; cursor: pointer; }
+.consent-agree input { margin-top: 2px; flex: 0 0 auto; }
+.pers-q { margin-bottom: 12px; }
+.pers-q label { display: block; font-size: 13px; color: var(--text-2); margin-bottom: 5px; }
+.pers-a { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); color: var(--text); font-size: 14px; box-sizing: border-box; }
+/* proactive popups */
+.pers-popups { position: fixed; top: 64px; right: 18px; z-index: 70; display: flex; flex-direction: column; gap: 10px; width: 322px; max-width: calc(100vw - 36px); pointer-events: none; }
+.pers-pop { pointer-events: auto; display: flex; gap: 11px; align-items: flex-start; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px 13px; box-shadow: var(--shadow-lg); transform: translateX(120%); opacity: 0; transition: transform .35s cubic-bezier(.2,.8,.2,1), opacity .35s; }
+.pers-pop.show { transform: translateX(0); opacity: 1; }
+.pers-pop.live { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, var(--shadow-lg); }
+.pers-pop.clickable { cursor: pointer; }
+.pers-pop-ic { font-size: 22px; line-height: 1; margin-top: 1px; }
+.pers-pop-main { flex: 1; min-width: 0; }
+.pers-pop-kind { font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.pers-live { color: var(--red); font-weight: 800; }
+.pers-pop-title { font-size: 14px; font-weight: 700; color: var(--text); margin-top: 2px; }
+.pers-pop-detail { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+.pers-pop-x { border: 0; background: transparent; color: var(--dim); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; align-self: flex-start; }
+/* course */
+.course-dialog { width: min(500px, 95vw); }
+.course-bar { height: 6px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin: 2px 0 16px; }
+.course-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 999px; transition: width .3s; }
+.course-title { margin: 0 0 8px; font-size: 18px; }
+.course-body { margin: 0 0 18px; font-size: 14px; line-height: 1.6; color: var(--text-2); }
+.course-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.course-count { flex: 1; text-align: center; }
 .ideas-loading { padding: 20px; text-align: center; }
 .idea-card { border: 1px solid var(--border); border-radius: 14px; padding: 14px; background: var(--panel); box-shadow: var(--shadow-sm); }
 .idea-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 8px; }

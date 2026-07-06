@@ -675,6 +675,7 @@ async function removeTicker(symbol) {
 /* ---------- Stock detail + chart ---------- */
 async function selectStock(symbol) {
   state.active = symbol;
+  reportActivity("view", symbol);   // personalization: note what you look at
   renderWatchlist();
   $("#symName").textContent = "Loading…";
   $("#symSymbol").textContent = symbol;
@@ -2885,6 +2886,108 @@ function toggleListen() {
 }
 
 /* ---------- UI wiring ---------- */
+/* ---------- Personalized FAAM (Beta) — dev only ---------- */
+let persState = { available: false, enabled: false, questions: [], profile: {} };
+let persTimer = null;
+let persSeen = new Set();
+
+async function loadPersonalize() {
+  try {
+    const r = await fetch("/api/personalize");
+    if (!r.ok) { persState.available = false; return; }
+    persState = await r.json();
+  } catch { persState.available = false; return; }
+  const row = $("#personalizeRow");
+  if (row) row.hidden = !persState.available;
+  $("#personalizeToggle")?.setAttribute("aria-checked", persState.enabled ? "true" : "false");
+  if (persState.enabled) startPersFeed();
+}
+function openConsent() {
+  $("#consentCheck").checked = false;
+  $("#consentAgree").disabled = true;
+  openDialog("consentDialog");
+}
+async function setPersonalize(agree) {
+  try {
+    await fetch("/api/personalize/consent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agree }) });
+  } catch { /* ignore */ }
+  persState.enabled = agree;
+  $("#personalizeToggle")?.setAttribute("aria-checked", agree ? "true" : "false");
+  if (agree) { openPersOnboarding(); startPersFeed(); toast("Personalized FAAM is on ✨"); }
+  else { stopPersFeed(); toast("Personalization turned off"); }
+}
+function openPersOnboarding() {
+  const wrap = $("#persQuestions");
+  wrap.innerHTML = (persState.questions || []).map((q) =>
+    `<div class="pers-q"><label>${escapeHtml(q.q)}</label><input class="pers-a" data-id="${escapeHtml(q.id)}" value="${escapeHtml((persState.profile || {})[q.id] || "")}" placeholder="Type your answer…"></div>`
+  ).join("");
+  openDialog("onboardPersDialog", ".pers-a");
+}
+async function savePersAnswers() {
+  const answers = [...document.querySelectorAll(".pers-a")].map((i) => ({ id: i.dataset.id, answer: i.value.trim() })).filter((a) => a.answer);
+  try {
+    const d = await (await fetch("/api/personalize/answers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answers }) })).json();
+    persState.profile = d.profile || {};
+  } catch { /* ignore */ }
+  $("#onboardPersDialog").close();
+  toast("Got it — FAAM will tailor things to you 🎯");
+  refreshPersFeed();
+}
+function reportActivity(event, symbol) {
+  if (!persState.enabled) return;
+  fetch("/api/personalize/activity", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ event, symbol: symbol || "" }) }).catch(() => {});
+}
+function startPersFeed() { if (persTimer) return; refreshPersFeed(); persTimer = setInterval(refreshPersFeed, 45000); }
+function stopPersFeed() { if (persTimer) { clearInterval(persTimer); persTimer = null; } const p = $("#persPopups"); if (p) p.innerHTML = ""; }
+async function refreshPersFeed() {
+  if (document.hidden) return;
+  let d;
+  try { d = await (await fetch("/api/personalize/feed")).json(); } catch { return; }
+  if (!d || !d.enabled) return;
+  (d.cards || []).forEach((c) => {
+    if (persSeen.has(c.key)) return;
+    persSeen.add(c.key);
+    if (persSeen.size > 300) persSeen = new Set([...persSeen].slice(-150));
+    showPersPopup(c);
+  });
+}
+function showPersPopup(c) {
+  const el = document.createElement("div");
+  el.className = "pers-pop" + (c.live ? " live" : "");
+  el.innerHTML =
+    `<div class="pers-pop-ic">${c.icon || "✨"}</div>` +
+    `<div class="pers-pop-main"><div class="pers-pop-kind">${escapeHtml(c.kind || "For you")}${c.live ? ' <span class="pers-live">● LIVE</span>' : ""}</div>` +
+    `<div class="pers-pop-title">${escapeHtml(c.title || "")}</div>` +
+    (c.detail ? `<div class="pers-pop-detail">${escapeHtml(c.detail)}</div>` : "") + `</div>` +
+    `<button class="pers-pop-x" aria-label="Dismiss">×</button>`;
+  $("#persPopups").prepend(el);
+  el.querySelector(".pers-pop-x").addEventListener("click", (e) => { e.stopPropagation(); el.remove(); });
+  if (c.symbol) { el.classList.add("clickable"); el.addEventListener("click", () => { selectStock(c.symbol); }); }
+  requestAnimationFrame(() => el.classList.add("show"));
+  if (!c.live) setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 400); }, 13000);
+}
+
+/* ---------- Beginner course ---------- */
+let courseIdx = 0, courseData = [];
+async function openCourse() {
+  if (!courseData.length) {
+    try { courseData = (await (await fetch("/api/course")).json()).lessons || []; } catch { /* ignore */ }
+  }
+  courseIdx = Math.min(parseInt(localStorage.getItem("faam_course_idx") || "0", 10) || 0, Math.max(0, courseData.length - 1));
+  renderCourse();
+  openDialog("courseDialog");
+}
+function renderCourse() {
+  const l = courseData[courseIdx]; if (!l) return;
+  $("#courseTitle").textContent = l.t;
+  $("#courseText").textContent = l.b;
+  $("#courseCount").textContent = `Lesson ${courseIdx + 1} of ${courseData.length}`;
+  $("#courseFill").style.width = ((courseIdx + 1) / courseData.length * 100) + "%";
+  $("#coursePrev").disabled = courseIdx === 0;
+  $("#courseNext").textContent = courseIdx === courseData.length - 1 ? "Finish ✓" : "Next →";
+  try { localStorage.setItem("faam_course_idx", String(courseIdx)); } catch (e) {}
+}
+
 function wire() {
   $$("#rangeTabs button").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -3078,6 +3181,24 @@ function wire() {
   });
   $("#titanSaveBtn")?.addEventListener("click", titanTeach);
   $("#titanSkip")?.addEventListener("click", () => { $("#titanTeach").hidden = true; titanPendingQ = ""; });
+
+  // Personalized FAAM (Beta)
+  $("#personalizeToggle")?.addEventListener("click", () => { if (persState.enabled) setPersonalize(false); else openConsent(); });
+  $("#closeConsent")?.addEventListener("click", () => $("#consentDialog").close());
+  $("#consentCancel")?.addEventListener("click", () => $("#consentDialog").close());
+  $("#consentCheck")?.addEventListener("change", (e) => { $("#consentAgree").disabled = !e.target.checked; });
+  $("#consentAgree")?.addEventListener("click", () => { $("#consentDialog").close(); setPersonalize(true); });
+  $("#closeOnboardPers")?.addEventListener("click", () => $("#onboardPersDialog").close());
+  $("#persSkip")?.addEventListener("click", () => $("#onboardPersDialog").close());
+  $("#persSave")?.addEventListener("click", savePersAnswers);
+  // Beginner course
+  $("#openCourseBtn")?.addEventListener("click", openCourse);
+  $("#closeCourse")?.addEventListener("click", () => $("#courseDialog").close());
+  $("#coursePrev")?.addEventListener("click", () => { if (courseIdx > 0) { courseIdx--; renderCourse(); } });
+  $("#courseNext")?.addEventListener("click", () => {
+    if (courseIdx < courseData.length - 1) { courseIdx++; renderCourse(); }
+    else { $("#courseDialog").close(); toast("Course complete — nice work! 🎓"); }
+  });
   $("#ideasRegen").addEventListener("click", loadIdeas);
   $("#ideasList").addEventListener("click", (e) => {
     const tk = e.target.closest("[data-tick]");
@@ -3280,6 +3401,7 @@ window.addEventListener("DOMContentLoaded", () => {
   loadWatchlist();
   loadPortfolio();
   loadPro();
+  loadPersonalize();
   if (state.gameOn) loadGame();
   updateMarketClock();
   setInterval(updateMarketClock, 30_000);

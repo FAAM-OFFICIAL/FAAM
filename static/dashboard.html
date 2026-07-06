@@ -688,6 +688,65 @@
 
   <!-- Settings -->
   <!-- AI trade ideas -->
+  <!-- Personalized FAAM (Beta): consent -->
+  <dialog id="consentDialog" class="form-dialog">
+    <header>
+      <div class="ai-title"><span class="ai-badge pers-badge">BETA</span><h3>Turn on Personalized FAAM</h3></div>
+      <button class="iconbtn" id="closeConsent" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="form-body">
+      <p class="muted small">Personalized FAAM lets our agent tailor the app to you. Please review and agree before it turns on:</p>
+      <ul class="consent-list">
+        <li>FAAM's AI may <b>observe your in-app activity</b> (stocks you open, features you use) to personalize what you see.</li>
+        <li>It will <b>ask a few questions</b> (like your favorite sport) and remember your answers.</li>
+        <li>It may show <b>proactive cards</b> — live scores for your team, or nudges about stocks you follow.</li>
+        <li>Everything stays on <b>this device</b>, and you can switch it off anytime in Settings.</li>
+      </ul>
+      <label class="consent-agree"><input type="checkbox" id="consentCheck"> I understand and agree to let FAAM personalize my experience.</label>
+      <div class="row">
+        <button type="button" class="btn-ghost" id="consentCancel">Cancel</button>
+        <button type="button" class="btn-go" id="consentAgree" disabled>Turn it on</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Personalized FAAM (Beta): onboarding questions -->
+  <dialog id="onboardPersDialog" class="form-dialog">
+    <header>
+      <div class="ai-title"><span class="ai-badge pers-badge">BETA</span><h3>Tell FAAM about you</h3></div>
+      <button class="iconbtn" id="closeOnboardPers" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="form-body">
+      <p class="muted small">A few quick questions so FAAM can personalize things. Answer what you like — skip the rest.</p>
+      <div id="persQuestions"></div>
+      <div class="row">
+        <button type="button" class="btn-ghost" id="persSkip">Skip for now</button>
+        <button type="button" class="btn-go" id="persSave">Save &amp; personalize</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Beginner course -->
+  <dialog id="courseDialog" class="form-dialog course-dialog">
+    <header>
+      <div class="ai-title"><span class="ai-badge learn-badge">LEARN</span><h3>Learn to invest</h3></div>
+      <button class="iconbtn" id="closeCourse" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div class="form-body">
+      <div class="course-bar"><div class="course-bar-fill" id="courseFill"></div></div>
+      <h4 class="course-title" id="courseTitle"></h4>
+      <p class="course-body" id="courseText"></p>
+      <div class="course-nav">
+        <button type="button" class="btn-ghost" id="coursePrev">← Back</button>
+        <span class="course-count muted small" id="courseCount"></span>
+        <button type="button" class="btn-go" id="courseNext">Next →</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Personalized proactive popups -->
+  <div id="persPopups" class="pers-popups" aria-live="polite"></div>
+
   <!-- Titan — chat with the local model; teach it when it doesn't know -->
   <dialog id="titanDialog" class="form-dialog titan-dialog">
     <header>
@@ -818,6 +877,20 @@
             <span class="addon-desc muted small">Earn tokens, build streaks, and climb the leaderboard.</span>
           </div>
           <button type="button" class="addon-toggle" id="gameToggle" role="switch" aria-checked="false" aria-label="Toggle Game of Stocks"><span class="addon-knob"></span></button>
+        </div>
+        <div class="addon-row" id="courseRow">
+          <div class="addon-main">
+            <span class="addon-name">Learn to invest — the course</span>
+            <span class="addon-desc muted small">A short, plain-language course that takes you from zero to your first investment.</span>
+          </div>
+          <button type="button" class="ghostbtn" id="openCourseBtn">Start course →</button>
+        </div>
+        <div class="addon-row" id="personalizeRow" hidden>
+          <div class="addon-main">
+            <span class="addon-name">Personalized <span class="beta-chip">BETA</span></span>
+            <span class="addon-desc muted small">FAAM's agent learns what you care about and surfaces it for you — including live scores for your team. Dev preview.</span>
+          </div>
+          <button type="button" class="addon-toggle" id="personalizeToggle" role="switch" aria-checked="false" aria-label="Toggle personalization"><span class="addon-knob"></span></button>
         </div>
       </div>
       <div class="setting-group">

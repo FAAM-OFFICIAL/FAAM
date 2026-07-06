@@ -68,6 +68,10 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # What's-new feed: shown in-app, and the top version drives the "new" badge.
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
+    {"version": "1.7", "date": "2026-07-03", "title": "Learn to invest + Personalized (Beta)", "items": [
+        {"tag": "new", "text": "Learn to invest — a short, plain-language course that takes you from zero to your first investment. Find it in Settings."},
+        {"tag": "new", "text": "Personalized FAAM (Beta, early preview) — opt in and FAAM tailors the app to you, including proactive cards for what you follow."},
+    ]},
     {"version": "1.6", "date": "2026-07-02", "title": "Meet Titan 1.1 Beta", "items": [
         {"tag": "new", "text": "Titan 1.1 Beta — FAAM's own model that learns from every answer the assistant gives."},
         {"tag": "new", "text": "Chat with Titan directly, and teach it when it doesn't know — it grows over time and can answer on its own."},
@@ -1513,6 +1517,164 @@ def titan_feedback(question: str, answer: str, good: bool) -> None:
             _save_json(TITAN_FILE, kept)
 
 
+# ---------- Personalization (Beta) — dev-only agent that watches & tailors -----
+# Opt-in: the user signs a consent, answers a few questions, and a backend pass
+# uses their profile + in-app activity to surface personalized cards (incl. live
+# sports for their favorite team). Gated to the admin/dev account for now.
+PERSONALIZE_FILE = DATA_DIR / "personalize.json"
+_PERS_LOCK = threading.Lock()
+
+PERS_QUESTIONS = [
+    {"id": "sport", "q": "What's your favorite sport? (e.g. soccer, basketball, football)"},
+    {"id": "team", "q": "Any favorite team or player? (optional — helps me flag their games)"},
+    {"id": "interests", "q": "Outside of markets, what do you follow? (tech, music, gaming, cars…)"},
+    {"id": "style", "q": "How would you describe your investing style — cautious, balanced, or aggressive?"},
+]
+
+# free-text sport → (ESPN sport, league). The World Cup (fifa.world) is in season.
+_SPORT_LEAGUE = {
+    "soccer": ("soccer", "fifa.world"), "football": ("soccer", "fifa.world"),
+    "world cup": ("soccer", "fifa.world"), "futbol": ("soccer", "fifa.world"),
+    "fútbol": ("soccer", "fifa.world"), "premier": ("soccer", "eng.1"),
+    "basketball": ("basketball", "nba"), "nba": ("basketball", "nba"),
+    "american football": ("football", "nfl"), "nfl": ("football", "nfl"),
+    "baseball": ("baseball", "mlb"), "mlb": ("baseball", "mlb"),
+    "hockey": ("hockey", "nhl"), "nhl": ("hockey", "nhl"),
+}
+
+
+def personalize_load() -> dict:
+    return _load_json(PERSONALIZE_FILE,
+                      {"enabled": False, "consented": 0, "profile": {}, "activity": [], "answered": []})
+
+
+def personalize_save(d: dict) -> None:
+    with _PERS_LOCK:
+        _save_json(PERSONALIZE_FILE, d)
+
+
+def _sport_league(text: str):
+    t = (text or "").lower()
+    for k, v in _SPORT_LEAGUE.items():
+        if k in t:
+            return v
+    return None
+
+
+def espn_scoreboard(sport: str, league: str) -> list:
+    """Live/next games from ESPN's public scoreboard (no key)."""
+    try:
+        data = _http_json(
+            f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard", timeout=8)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for e in (data.get("events") or [])[:8]:
+        comp = (e.get("competitions") or [{}])[0]
+        cs = comp.get("competitors") or []
+        h = next((c for c in cs if c.get("homeAway") == "home"), {})
+        a = next((c for c in cs if c.get("homeAway") == "away"), {})
+        st = (e.get("status") or {}).get("type") or {}
+        out.append({
+            "id": e.get("id"),
+            "home": (h.get("team") or {}).get("abbreviation") or (h.get("team") or {}).get("displayName") or "",
+            "away": (a.get("team") or {}).get("abbreviation") or (a.get("team") or {}).get("displayName") or "",
+            "homeScore": h.get("score"), "awayScore": a.get("score"),
+            "state": st.get("state"),                 # pre / in / post
+            "detail": st.get("shortDetail") or st.get("detail") or "",
+            "live": st.get("state") == "in",
+        })
+    return out
+
+
+def personalize_extract(answers: list) -> dict:
+    """Turn free-text answers into a structured profile — via the AI, with a
+    keyword fallback so it still works offline."""
+    prof: dict = {}
+    for a in answers:
+        i, v = a.get("id"), (a.get("answer") or "").strip()
+        if i in ("sport", "team", "interests", "style") and v:
+            prof[i] = v
+    if OPENAI_API_KEY and answers:
+        try:
+            qa = "\n".join(f"{x.get('id')}: {x.get('answer')}" for x in answers)
+            r = openai_chat(
+                [{"role": "user", "content":
+                  "From these answers, output compact JSON with keys sport (one lowercase word "
+                  "like soccer/basketball/baseball), team (string), interests (array of short "
+                  "topics), style (cautious|balanced|aggressive). Answers:\n" + qa}],
+                system="You output only minified JSON, no prose, no code fences.")
+            txt = extract_text(r)
+            mt = re.search(r"\{.*\}", txt, re.S)
+            if mt:
+                got = json.loads(mt.group(0))
+                for k in ("sport", "team", "interests", "style"):
+                    if got.get(k):
+                        prof[k] = got[k]
+        except Exception:  # noqa: BLE001
+            pass
+    return prof
+
+
+def personalize_feed() -> dict:
+    """The 'bot' pass: build personalized cards from profile + activity + live data."""
+    d = personalize_load()
+    if not d.get("enabled"):
+        return {"enabled": False, "cards": []}
+    prof = d.get("profile") or {}
+    cards = []
+    lg = _sport_league(prof.get("sport"))
+    if lg:
+        team = (prof.get("team") or "").lower()
+        for g in espn_scoreboard(*lg):
+            hs, as_ = g.get("homeScore"), g.get("awayScore")
+            scored = hs is not None and as_ is not None
+            title = (f"{g['away']} {as_} – {hs} {g['home']}" if scored
+                     else f"{g['away']} @ {g['home']}")
+            mine = team and (team in g["home"].lower() or team in g["away"].lower())
+            cards.append({
+                "type": "sport",
+                "icon": {"soccer": "⚽", "basketball": "🏀", "football": "🏈",
+                         "baseball": "⚾", "hockey": "🏒"}.get(lg[0], "🏆"),
+                "kind": lg[1].replace(".", " ").upper() + (" · your team" if mine else ""),
+                "title": title, "detail": g.get("detail", ""), "live": g.get("live"),
+                "priority": 2 if g.get("live") else (1 if mine else 0),
+                "key": f"sport:{g.get('id')}:{hs}-{as_}:{g.get('detail')}",
+            })
+    act = d.get("activity") or []
+    from collections import Counter
+    views = Counter(a.get("symbol") for a in act if a.get("event") == "view" and a.get("symbol"))
+    if views:
+        sym, n = views.most_common(1)[0]
+        cards.append({"type": "insight", "icon": "📈", "kind": "For you",
+                      "title": f"You've been watching {sym}",
+                      "detail": f"Opened {n}× recently — check today's move.",
+                      "symbol": sym, "priority": 0, "key": f"insight:{sym}:{n}"})
+    cards.sort(key=lambda c: -c.get("priority", 0))
+    return {"enabled": True, "cards": cards, "profile": prof}
+
+
+# ---------- Beginner stock course --------------------------------------------
+COURSE = [
+    {"t": "Welcome — what investing really is",
+     "b": "Investing is buying a share of a business so you can grow your money as that business grows. It's not gambling and it's not get-rich-quick — it's owning good things for a long time. This short course gives you the vocabulary and confidence to start."},
+    {"t": "Stocks & shares",
+     "b": "A stock (or share) is a slice of ownership in a company. Own a share of Apple and you own a tiny piece of Apple — including a claim on its future profits. Prices move as people's expectations about the company change."},
+    {"t": "The market & indexes",
+     "b": "The 'market' is millions of buyers and sellers trading shares. An index like the S&P 500 tracks 500 big U.S. companies at once — a quick pulse of how stocks are doing overall. You can invest in a whole index with a single ETF."},
+    {"t": "Reading a price & a chart",
+     "b": "Price is what one share costs right now; the % change shows today's move. A chart plots price over time — up-and-to-the-right is a rising trend. In FAAM, switch ranges (1D–5Y) and try the Candles view to see each day's high and low."},
+    {"t": "Risk & diversification",
+     "b": "Every investment can lose value — that's risk. The fix isn't to avoid it but to spread it: owning many different things so no single loss can sink you. A broad index fund is diversified in one click. Never invest money you'll need soon."},
+    {"t": "How beginners actually start",
+     "b": "1) Build a small cash emergency fund first. 2) Open a brokerage account. 3) Start with a low-cost index fund and invest a fixed amount on a schedule (dollar-cost averaging). 4) Add individual stocks only once you understand them."},
+    {"t": "Common mistakes to avoid",
+     "b": "Chasing hype, checking prices every hour, panic-selling in dips, and putting everything in one stock. The investors who do best are usually the ones who buy quality, diversify, and then leave it alone for years."},
+    {"t": "You're ready — a safe first step",
+     "b": "You now know the core ideas: shares, indexes, risk, diversification, and dollar-cost averaging. A common first move is a small, regular investment into a broad index fund. FAAM is here to help you research — but every decision is yours. Not financial advice."},
+]
+
+
 def openai_chat(messages: list, system: str | None = None) -> dict:
     """Call OpenAI chat completions API."""
     if not OPENAI_API_KEY:
@@ -2824,6 +2986,28 @@ NOT FINANCIAL ADVICE.
         if path == "/api/titan":
             return self._json(titan_stats())
 
+        if path == "/api/course":
+            return self._json({"lessons": COURSE, "count": len(COURSE)})
+
+        # Personalization (Beta) — dev/admin account only.
+        if path == "/api/personalize":
+            u = self._current_user()
+            if not (u and u.get("admin")):
+                return self._json({"available": False}, 403)
+            d = personalize_load()
+            return self._json({
+                "available": True, "beta": True,
+                "enabled": bool(d.get("enabled")), "consented": bool(d.get("consented")),
+                "answered": d.get("answered", []), "profile": d.get("profile", {}),
+                "questions": PERS_QUESTIONS,
+            })
+
+        if path == "/api/personalize/feed":
+            u = self._current_user()
+            if not (u and u.get("admin")):
+                return self._json({"enabled": False, "cards": []})
+            return self._json(personalize_feed())
+
         if path == "/api/adviser":
             return self._json({"text": load_adviser()})
 
@@ -3608,6 +3792,46 @@ NOT FINANCIAL ADVICE.
                 return self._json({"error": "missing question"}, 400)
             titan_feedback(q, a, good)
             return self._json({"ok": True, **titan_stats()})
+
+        # ---- Personalization (Beta) — dev/admin account only ----
+        if path == "/api/personalize/consent":
+            u = self._current_user()
+            if not (u and u.get("admin")):
+                return self._json({"error": "dev only"}, 403)
+            body = self._read_json()
+            d = personalize_load()
+            if body.get("agree"):
+                d["enabled"], d["consented"] = True, int(time.time())
+            else:
+                d["enabled"] = False
+            personalize_save(d)
+            return self._json({"ok": True, "enabled": d["enabled"]})
+
+        if path == "/api/personalize/answers":
+            u = self._current_user()
+            if not (u and u.get("admin")):
+                return self._json({"error": "dev only"}, 403)
+            body = self._read_json()
+            answers = body.get("answers") or []
+            prof = personalize_extract(answers)
+            d = personalize_load()
+            d.setdefault("profile", {}).update(prof)
+            d["answered"] = [a.get("id") for a in answers if a.get("id")]
+            personalize_save(d)
+            return self._json({"ok": True, "profile": d["profile"]})
+
+        if path == "/api/personalize/activity":
+            u = self._current_user()
+            if not (u and u.get("admin")):
+                return self._json({"ok": False})
+            d = personalize_load()
+            if d.get("enabled"):
+                body = self._read_json()
+                ev = {"event": (body.get("event") or "")[:24],
+                      "symbol": (body.get("symbol") or "")[:12].upper(), "t": int(time.time())}
+                d["activity"] = (d.get("activity") or [])[-300:] + [ev]
+                personalize_save(d)
+            return self._json({"ok": True})
 
         if path == "/api/analyze":
             if usage_blocked():
