@@ -2900,6 +2900,7 @@ async function loadPersonalize() {
   const row = $("#personalizeRow");
   if (row) row.hidden = !persState.available;
   $("#personalizeToggle")?.setAttribute("aria-checked", persState.enabled ? "true" : "false");
+  updateForYouBtn();
   if (persState.enabled) startPersFeed();
 }
 function openConsent() {
@@ -2913,6 +2914,7 @@ async function setPersonalize(agree) {
   } catch { /* ignore */ }
   persState.enabled = agree;
   $("#personalizeToggle")?.setAttribute("aria-checked", agree ? "true" : "false");
+  updateForYouBtn();
   if (agree) { openPersOnboarding(); startPersFeed(); toast("Personalized FAAM is on ✨"); }
   else { stopPersFeed(); toast("Personalization turned off"); }
 }
@@ -2925,12 +2927,15 @@ function openPersOnboarding() {
 }
 async function savePersAnswers() {
   const answers = [...document.querySelectorAll(".pers-a")].map((i) => ({ id: i.dataset.id, answer: i.value.trim() })).filter((a) => a.answer);
+  let added = [];
   try {
     const d = await (await fetch("/api/personalize/answers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answers }) })).json();
     persState.profile = d.profile || {};
+    added = d.added || [];
   } catch { /* ignore */ }
   $("#onboardPersDialog").close();
-  toast("Got it — FAAM will tailor things to you 🎯");
+  if (added.length) { toast("Added " + added.join(", ") + " to your watchlist ⭐"); loadWatchlist(); }
+  else toast("Got it — FAAM will tailor things to you 🎯");
   refreshPersFeed();
 }
 function reportActivity(event, symbol) {
@@ -2978,6 +2983,61 @@ function showPersPopup(c) {
   }
   requestAnimationFrame(() => el.classList.add("show"));
   if (!c.live) setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 400); }, 13000);
+}
+
+/* ---------- For You — persistent feed + price alerts ---------- */
+function updateForYouBtn() {
+  const b = $("#forYouBtn");
+  if (b) b.hidden = !(persState.available && persState.enabled);
+}
+async function openForYou() { openDialog("forYouDialog"); refreshForYou(); }
+async function refreshForYou() {
+  let d;
+  try { d = await (await fetch("/api/personalize/feed")).json(); } catch { return; }
+  renderForYou(d.cards || [], d.alerts || []);
+}
+function renderForYou(cards, alerts) {
+  const wrap = $("#forYouCards");
+  if (!cards.length) {
+    wrap.innerHTML = '<p class="muted small" style="text-align:center;padding:14px 0">Nothing here yet — answer a few questions and use FAAM, and your feed fills in.</p>';
+  } else {
+    wrap.innerHTML = "";
+    cards.forEach((c) => {
+      const el = document.createElement("div");
+      el.className = "foryou-card" + (c.live ? " live" : "");
+      el.innerHTML =
+        `<div class="pers-pop-ic">${c.icon || "✨"}</div>` +
+        `<div class="pers-pop-main"><div class="pers-pop-kind">${escapeHtml(c.kind || "For you")}${c.live ? ' <span class="pers-live">● LIVE</span>' : ""}</div>` +
+        `<div class="pers-pop-title">${escapeHtml(c.title || "")}</div>` +
+        (c.detail ? `<div class="pers-pop-detail">${escapeHtml(c.detail)}</div>` : "") + `</div>`;
+      if (c.symbol) { el.classList.add("clickable"); el.addEventListener("click", () => { selectStock(c.symbol); $("#forYouDialog").close(); }); }
+      else if (c.tickers) { el.classList.add("clickable"); el.addEventListener("click", async () => { for (const t of c.tickers) { try { await addTicker(t); } catch (e) {} } toast("Added " + c.tickers.join(", ") + " ⭐"); refreshForYou(); }); }
+      else if (c.link) { el.classList.add("clickable"); el.addEventListener("click", () => window.open(c.link, "_blank", "noopener")); }
+      wrap.appendChild(el);
+    });
+  }
+  const al = $("#alertList");
+  al.innerHTML = alerts.length
+    ? alerts.map((a) => `<div class="alert-row"><span>🔔 <b>${escapeHtml(a.symbol)}</b> ${escapeHtml(a.dir)} $${Number(a.price).toFixed(2)}</span><button class="alert-x" data-id="${escapeHtml(a.id)}" aria-label="Remove">×</button></div>`).join("")
+    : '<p class="muted small" style="margin:4px 0">No alerts yet — add one below.</p>';
+  al.querySelectorAll(".alert-x").forEach((b) => b.addEventListener("click", () => removeAlert(b.dataset.id)));
+}
+async function addAlert() {
+  const sym = ($("#alertSym").value || "").trim().toUpperCase();
+  const dir = $("#alertDir").value;
+  const price = parseFloat($("#alertPrice").value);
+  if (!sym || !(price > 0)) { toast("Enter a ticker and a price"); return; }
+  try {
+    const d = await (await fetch("/api/personalize/alert", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ symbol: sym, dir, price }) })).json();
+    if (d.error) { toast(d.error); return; }
+  } catch { return; }
+  $("#alertSym").value = ""; $("#alertPrice").value = "";
+  toast(`Alert set — ${sym} ${dir} $${price}`);
+  refreshForYou();
+}
+async function removeAlert(id) {
+  try { await fetch("/api/personalize/alert/remove", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) }); } catch { /* ignore */ }
+  refreshForYou();
 }
 
 /* ---------- Beginner course ---------- */
@@ -3204,6 +3264,11 @@ function wire() {
   $("#closeOnboardPers")?.addEventListener("click", () => $("#onboardPersDialog").close());
   $("#persSkip")?.addEventListener("click", () => $("#onboardPersDialog").close());
   $("#persSave")?.addEventListener("click", savePersAnswers);
+  // For You feed + price alerts
+  $("#forYouBtn")?.addEventListener("click", openForYou);
+  $("#closeForYou")?.addEventListener("click", () => $("#forYouDialog").close());
+  $("#alertAdd")?.addEventListener("click", addAlert);
+  $("#alertPrice")?.addEventListener("keydown", (e) => { if (e.key === "Enter") addAlert(); });
   // Beginner course
   $("#openCourseBtn")?.addEventListener("click", openCourse);
   $("#closeCourse")?.addEventListener("click", () => $("#courseDialog").close());

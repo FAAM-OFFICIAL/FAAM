@@ -1709,6 +1709,22 @@ def personalize_feed() -> dict:
         return {"enabled": False, "cards": []}
     prof = d.get("profile") or {}
     cards = []
+    # Price alerts — fire when the live price crosses the target (quote is cached).
+    for al in (d.get("alerts") or [])[:12]:
+        try:
+            q = yahoo_quote(al["symbol"], range_="1mo", interval="1d")
+            px = q.get("price")
+        except Exception:  # noqa: BLE001
+            px = None
+        if not px:
+            continue
+        crossed = ((al["dir"] == "above" and px >= al["price"]) or
+                   (al["dir"] == "below" and px <= al["price"]))
+        if crossed:
+            cards.append({"type": "alert", "icon": "🔔", "kind": "Price alert",
+                          "title": f"{al['symbol']} is {al['dir']} ${al['price']:.2f}",
+                          "detail": f"Now ${px:.2f}", "symbol": al["symbol"], "live": True,
+                          "priority": 3, "key": f"alert:{al['id']}"})
     lg = _sport_league(prof.get("sport"))
     if lg:
         team = (prof.get("team") or "").lower()
@@ -1755,7 +1771,7 @@ def personalize_feed() -> dict:
                       "detail": f"Opened {n}× recently — check today's move.",
                       "symbol": sym, "priority": 0, "key": f"insight:{sym}:{n}"})
     cards.sort(key=lambda c: -c.get("priority", 0))
-    return {"enabled": True, "cards": cards, "profile": prof}
+    return {"enabled": True, "cards": cards, "profile": prof, "alerts": d.get("alerts") or []}
 
 
 # ---------- Beginner stock course --------------------------------------------
@@ -3922,8 +3938,55 @@ NOT FINANCIAL ADVICE.
             d = personalize_load()
             d.setdefault("profile", {}).update(prof)
             d["answered"] = [a.get("id") for a in answers if a.get("id")]
+            # First enable: auto-add tickers that match the user's interests.
+            added = []
+            if not d.get("autoadded"):
+                picks = interests_to_tickers(interests_text(d["profile"]))
+                if picks:
+                    wl = load_watchlist()
+                    for s in picks:
+                        if s not in wl:
+                            wl.append(s)
+                            added.append(s)
+                    if added:
+                        save_watchlist(wl)
+                d["autoadded"] = True
             personalize_save(d)
-            return self._json({"ok": True, "profile": d["profile"]})
+            return self._json({"ok": True, "profile": d["profile"], "added": added})
+
+        if path == "/api/personalize/alert":
+            u = self._current_user()
+            if not (u and u.get("admin")):
+                return self._json({"error": "dev only"}, 403)
+            body = self._read_json()
+            sym = (body.get("symbol") or "").strip().upper()[:12]
+            direction = body.get("dir") if body.get("dir") in ("above", "below") else "above"
+            try:
+                price = float(body.get("price"))
+            except Exception:  # noqa: BLE001
+                price = 0.0
+            if not sym or price <= 0:
+                return self._json({"error": "need a symbol and a positive price"}, 400)
+            d = personalize_load()
+            alerts = d.get("alerts") or []
+            if len(alerts) >= 12:
+                return self._json({"error": "up to 12 alerts"}, 400)
+            alerts.append({"id": str(int(time.time() * 1000)), "symbol": sym,
+                           "dir": direction, "price": price, "created": int(time.time())})
+            d["alerts"] = alerts
+            personalize_save(d)
+            return self._json({"ok": True, "alerts": alerts})
+
+        if path == "/api/personalize/alert/remove":
+            u = self._current_user()
+            if not (u and u.get("admin")):
+                return self._json({"error": "dev only"}, 403)
+            body = self._read_json()
+            aid = str(body.get("id") or "")
+            d = personalize_load()
+            d["alerts"] = [a for a in (d.get("alerts") or []) if str(a.get("id")) != aid]
+            personalize_save(d)
+            return self._json({"ok": True, "alerts": d["alerts"]})
 
         if path == "/api/personalize/activity":
             u = self._current_user()

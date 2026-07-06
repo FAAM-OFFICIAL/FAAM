@@ -1415,6 +1415,23 @@ body.beginner .beginner-banner.dismissed { display: none; }
 .course-body { margin: 0 0 18px; font-size: 14px; line-height: 1.6; color: var(--text-2); }
 .course-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .course-count { flex: 1; text-align: center; }
+/* For You panel */
+.foryou-dialog { width: min(460px, 95vw); }
+.foryou-cards { display: flex; flex-direction: column; gap: 9px; margin-bottom: 16px; }
+.foryou-card { display: flex; gap: 11px; align-items: flex-start; background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px; padding: 11px 12px; }
+.foryou-card.live { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.foryou-card.clickable { cursor: pointer; }
+.foryou-card.clickable:hover { border-color: var(--border-strong); }
+.foryou-alerts { border-top: 1px solid var(--border); padding-top: 12px; }
+.alert-list { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; }
+.alert-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--text-2); background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 7px 10px; }
+.alert-x { border: 0; background: transparent; color: var(--dim); font-size: 16px; cursor: pointer; line-height: 1; }
+.alert-add { display: flex; gap: 6px; }
+.alert-add input, .alert-add select { padding: 8px 9px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-2); color: var(--text); font-size: 13px; box-sizing: border-box; }
+.alert-add #alertSym { width: 68px; }
+.alert-add #alertPrice { width: 72px; }
+.alert-add select { flex: 1; min-width: 0; }
+.foryou-btn svg { color: var(--accent-2); }
 .ideas-loading { padding: 20px; text-align: center; }
 .idea-card { border: 1px solid var(--border); border-radius: 14px; padding: 14px; background: var(--panel); box-shadow: var(--shadow-sm); }
 .idea-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 8px; }
