@@ -1616,6 +1616,92 @@ def personalize_extract(answers: list) -> dict:
     return prof
 
 
+# Interests → relevant tickers, so the agent can tailor the watchlist.
+INTEREST_TICKERS = {
+    "tech": ["AAPL", "MSFT", "NVDA", "GOOGL"], "technology": ["AAPL", "MSFT", "NVDA", "GOOGL"],
+    "ai": ["NVDA", "MSFT", "PLTR"], "chip": ["NVDA", "AMD", "TSM"], "gaming": ["EA", "TTWO", "RBLX"],
+    "game": ["EA", "TTWO", "RBLX"], "music": ["SPOT", "WMG"], "movie": ["NFLX", "DIS", "WBD"],
+    "film": ["NFLX", "DIS", "WBD"], "streaming": ["NFLX", "SPOT", "DIS"], "car": ["TSLA", "F", "GM"],
+    "ev": ["TSLA", "RIVN", "GM"], "auto": ["TSLA", "F", "GM"], "sport": ["NKE", "DKNG"],
+    "crypto": ["COIN", "MSTR"], "food": ["MCD", "SBUX", "CMG"], "coffee": ["SBUX"],
+    "retail": ["AMZN", "WMT", "COST"], "energy": ["XOM", "CVX"], "space": ["RKLB", "LMT"],
+    "social": ["META", "SNAP", "PINS"], "phone": ["AAPL"], "travel": ["ABNB", "BKNG", "DAL"],
+    "airline": ["DAL", "UAL"], "bank": ["JPM", "BAC"], "finance": ["JPM", "V", "MA"],
+    "fashion": ["NKE", "LULU"], "fitness": ["NKE", "LULU", "PTON"],
+}
+_NEWS_CACHE: dict = {}
+_NEWS_TTL = 900  # 15 min
+
+
+def interests_text(prof: dict) -> str:
+    v = (prof or {}).get("interests")
+    if isinstance(v, list):
+        return " ".join(str(x) for x in v)
+    return str(v or "")
+
+
+def interests_to_tickers(text: str, limit: int = 6) -> list:
+    t = (text or "").lower()
+    seen, out = set(), []
+    for k, syms in INTEREST_TICKERS.items():
+        if k in t:
+            for s in syms:
+                if s not in seen:
+                    seen.add(s)
+                    out.append(s)
+    return out[:limit]
+
+
+def interest_news(query: str, limit: int = 1) -> list:
+    """Recent headlines for a topic via Google News RSS (free, no key), cached."""
+    key = (query or "").lower().strip()
+    if not key:
+        return []
+    now = time.time()
+    c = _NEWS_CACHE.get(key)
+    if c and now - c[0] < _NEWS_TTL:
+        return c[1][:limit]
+    import xml.etree.ElementTree as ET
+    try:
+        url = ("https://news.google.com/rss/search?q=" + urllib.parse.quote(query)
+               + "&hl=en-US&gl=US&ceid=US:en")
+        req = urllib.request.Request(url, headers={"User-Agent": "FAAM/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            root = ET.fromstring(r.read())
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for it in root.findall(".//item")[:6]:
+        title = (it.findtext("title") or "").strip()
+        link = (it.findtext("link") or "").strip()
+        if not title:
+            continue
+        headline, _, source = title.rpartition(" - ")
+        out.append({"headline": (headline or title)[:140], "source": source, "link": link})
+    _NEWS_CACHE[key] = (now, out)
+    return out[:limit]
+
+
+def personalize_system_suffix(user: dict) -> str:
+    """Extra system-prompt context so AI insights/chat reflect the user's profile."""
+    if not (user and user.get("admin")):
+        return ""
+    d = personalize_load()
+    if not d.get("enabled"):
+        return ""
+    p = d.get("profile") or {}
+    bits = []
+    if p.get("style"):
+        bits.append(f"investing style: {p['style']}")
+    it = interests_text(p)
+    if it:
+        bits.append(f"personal interests: {it}")
+    if not bits:
+        return ""
+    return ("\n\nThis user opted into personalization. Where it's genuinely relevant, tailor to — "
+            + "; ".join(bits) + " — but keep it natural and never force it.")
+
+
 def personalize_feed() -> dict:
     """The 'bot' pass: build personalized cards from profile + activity + live data."""
     d = personalize_load()
@@ -1641,6 +1727,24 @@ def personalize_feed() -> dict:
                 "priority": 2 if g.get("live") else (1 if mine else 0),
                 "key": f"sport:{g.get('id')}:{hs}-{as_}:{g.get('detail')}",
             })
+    # News for the user's non-market interests (tech, music, gaming…)
+    it_text = interests_text(prof)
+    if it_text:
+        topics = [t.strip() for t in re.split(r"[,/;]| and ", it_text) if t.strip()]
+        for topic in topics[:2]:
+            for n in interest_news(topic, limit=1):
+                cards.append({"type": "news", "icon": "📰", "kind": topic.upper()[:18],
+                              "title": n["headline"], "detail": n.get("source", ""),
+                              "link": n.get("link", ""), "priority": 0,
+                              "key": "news:" + (n.get("link") or n["headline"])[:70]})
+    # Personalized watchlist suggestion from interests
+    picks = interests_to_tickers(it_text)
+    if picks:
+        cards.append({"type": "watchlist", "icon": "⭐", "kind": "Made for you",
+                      "title": "Stocks that match your interests",
+                      "detail": ", ".join(picks) + " — tap to add them.",
+                      "tickers": picks, "priority": 1, "key": "wl:" + ",".join(picks)})
+    # Activity: most-viewed ticker
     act = d.get("activity") or []
     from collections import Counter
     views = Counter(a.get("symbol") for a in act if a.get("event") == "view" and a.get("symbol"))
@@ -3737,6 +3841,7 @@ NOT FINANCIAL ADVICE.
 
             user_q = next((m.get("content", "") for m in reversed(messages)
                            if m.get("role") == "user"), "")
+            system += personalize_system_suffix(self._current_user())   # tailor to profile
             result = openai_chat(messages, system=system)
             if "error" in result:
                 # OpenAI unavailable — let Titan answer from what it has learned.
@@ -3862,7 +3967,8 @@ NOT FINANCIAL ADVICE.
                 "Three short bullets: (1) momentum read, (2) one thing to watch, "
                 "(3) primary risk. End with a one-line disclaimer."
             )
-            result = openai_chat([{"role": "user", "content": prompt}], system=effective_system())
+            result = openai_chat([{"role": "user", "content": prompt}],
+                                 system=effective_system() + personalize_system_suffix(self._current_user()))
             if "error" in result:
                 return self._json(result, 502)
             record_cost(chat_cost(result))

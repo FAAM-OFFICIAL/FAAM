@@ -2962,7 +2962,20 @@ function showPersPopup(c) {
     `<button class="pers-pop-x" aria-label="Dismiss">×</button>`;
   $("#persPopups").prepend(el);
   el.querySelector(".pers-pop-x").addEventListener("click", (e) => { e.stopPropagation(); el.remove(); });
-  if (c.symbol) { el.classList.add("clickable"); el.addEventListener("click", () => { selectStock(c.symbol); }); }
+  if (c.symbol) {
+    el.classList.add("clickable");
+    el.addEventListener("click", () => selectStock(c.symbol));
+  } else if (c.tickers && c.tickers.length) {
+    el.classList.add("clickable");
+    el.addEventListener("click", async () => {
+      for (const t of c.tickers) { try { await addTicker(t); } catch (e) {} }
+      toast("Added " + c.tickers.join(", ") + " to your watchlist ⭐");
+      el.remove();
+    });
+  } else if (c.link) {
+    el.classList.add("clickable");
+    el.addEventListener("click", () => window.open(c.link, "_blank", "noopener"));
+  }
   requestAnimationFrame(() => el.classList.add("show"));
   if (!c.live) setTimeout(() => { el.classList.remove("show"); setTimeout(() => el.remove(), 400); }, 13000);
 }
