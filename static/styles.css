@@ -1400,7 +1400,11 @@ body.beginner .beginner-banner.dismissed { display: none; }
 .pers-pop.show { transform: translateX(0); opacity: 1; }
 .pers-pop.live { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, var(--shadow-lg); }
 .pers-pop.clickable { cursor: pointer; }
-.pers-pop-ic { font-size: 22px; line-height: 1; margin-top: 1px; }
+.pers-pop-ic { line-height: 1; margin-top: 1px; color: var(--accent); }
+.pers-pop-ic svg { width: 22px; height: 22px; display: block; }
+.pers-pop.live .pers-pop-ic, .foryou-card.live .pers-pop-ic { color: var(--red); }
+.titan-fb-btn svg { width: 15px; height: 15px; vertical-align: -3px; }
+.alert-bell svg { width: 13px; height: 13px; vertical-align: -2px; color: var(--muted); }
 .pers-pop-main { flex: 1; min-width: 0; }
 .pers-pop-kind { font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .pers-live { color: var(--red); font-weight: 800; }

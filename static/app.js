@@ -195,12 +195,24 @@ function openIdeas() {
 
 /* ---------- Titan — chat with the local model, and teach it ---------- */
 let titanPendingQ = "";
+/* ---------- Vector icons (replace emoji) ---------- */
+const ICON_SVGS = {
+  bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
+  sport: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
+  star: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 18.4 6.1 21l1.2-6.5L2.5 9.4l6.6-.9z"/></svg>',
+  news: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h13v16H5a1 1 0 0 1-1-1V4Z"/><path d="M17 8h2a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2"/><path d="M7 8h7M7 12h7M7 16h4"/></svg>',
+  chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 5-6"/></svg>',
+};
+function iconSvg(type) { return ICON_SVGS[type] || ICON_SVGS.star; }
+const THUMB_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v11"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>';
+const THUMB_DOWN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V3"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>';
+
 function openTitan() {
   openDialog("titanDialog", "titanInput");
   loadTitanStat();
   const log = $("#titanLog");
   if (log && !log.children.length) {
-    titanBubble("bot", "Hi, I'm Titan — FAAM's own model. I already know the basics of stocks, investing and how FAAM works. Ask me anything, rate my answers 👍/👎, and teach me whatever I don't know yet.");
+    titanBubble("bot", "Hi, I'm Titan — FAAM's built-in AI. Ask me anything about stocks, investing, or how FAAM works. Rate my answers, and correct me when I'm wrong.");
   }
 }
 function titanBubble(who, text) {
@@ -216,7 +228,7 @@ async function loadTitanStat() {
   try {
     const d = await (await fetch("/api/titan")).json();
     const el = $("#titanStat");
-    if (el) el.textContent = `${d.version || "Titan 1.1 Beta"} · knows ${d.knowledge || d.learned || 0} things · ${d.learned || 0} taught by you`;
+    if (el) el.textContent = "";
   } catch { /* ignore */ }
 }
 function titanAddFeedback(bubble, question, answer) {
@@ -224,8 +236,8 @@ function titanAddFeedback(bubble, question, answer) {
   fb.className = "titan-fb";
   fb.innerHTML =
     '<span class="titan-fb-q">Helpful?</span>' +
-    '<button class="titan-fb-btn" data-good="1" title="Good answer">👍</button>' +
-    '<button class="titan-fb-btn" data-good="0" title="Wrong — teach the right answer">👎</button>';
+    '<button class="titan-fb-btn" data-good="1" title="Good answer">'+THUMB_UP+'</button>' +
+    '<button class="titan-fb-btn" data-good="0" title="Wrong — teach the right answer">'+THUMB_DOWN+'</button>';
   bubble.appendChild(fb);
   fb.querySelector('[data-good="1"]').addEventListener("click", () => titanFeedback(question, answer, true, fb));
   fb.querySelector('[data-good="0"]').addEventListener("click", () => titanFeedback(question, answer, false, fb));
@@ -238,7 +250,7 @@ async function titanFeedback(question, answer, good, fbEl) {
     });
   } catch { /* ignore */ }
   if (good) {
-    if (fbEl) fbEl.innerHTML = '<span class="titan-fb-done">👍 Thanks — Titan will keep that.</span>';
+    if (fbEl) fbEl.innerHTML = '<span class="titan-fb-done">Thanks — Titan will keep that.</span>';
   } else {
     if (fbEl) fbEl.innerHTML = '<span class="titan-fb-done">Teach Titan the right answer below ↓</span>';
     titanPendingQ = question;
@@ -259,7 +271,7 @@ async function titanAsk(q) {
     const d = await r.json();
     if (d.known) {
       thinking.textContent = d.answer;
-      titanAddFeedback(thinking, q, d.answer);   // 👍 / 👎 on every answer
+      titanAddFeedback(thinking, q, d.answer);   // thumbs up/down on every answer
     } else {
       thinking.textContent = "I don't know that yet. Can you teach me the answer?";
       titanPendingQ = q;
@@ -281,7 +293,7 @@ async function titanTeach() {
     });
     $("#titanTeach").hidden = true;
     $("#titanAnswer").value = "";
-    titanBubble("bot", "Got it — I've learned that. Thanks for teaching me! 🎓 Ask me again anytime.");
+    titanBubble("bot", "Got it — I've learned that. Ask me again anytime.");
     titanPendingQ = "";
     loadTitanStat();
   } catch { /* ignore */ }
@@ -469,16 +481,9 @@ async function checkHealth() {
     state.titan = data.titan || {};
     const status = $("#aiStatus");
     const wrap = status.closest(".status");
-    const learned = state.titan.learned || 0;
-    const titanName = state.titan.version || "Titan 1.1 Beta";
-    const titanTag = learned > 0 ? ` · ${titanName} learned ${learned}` : "";
+    status.title = "";
     if (data.ai_enabled) {
-      status.textContent = "AI online" + titanTag;
-      status.title = learned > 0 ? `${titanName} has learned ${learned} answers` : "";
-      wrap.classList.remove("off"); wrap.classList.add("live");
-    } else if (learned > 0) {
-      status.textContent = `${titanName} ready (${learned} learned)`;
-      status.title = "AI is off — Titan answers from what it learned";
+      status.textContent = "AI online";
       wrap.classList.remove("off"); wrap.classList.add("live");
     } else {
       status.textContent = "AI offline";
@@ -2052,7 +2057,7 @@ async function sendChat(text, opts = { openDialog: true }) {
     if (data.source === "titan") {
       loadingEl.classList.add("titan");
       loadingEl.title = `Answered by ${(data.titan && data.titan.version) || "Titan 1.1 Beta"} — learned locally, AI is offline`;
-      loadingEl.textContent = "⚡ " + data.text;
+      loadingEl.textContent = data.text;
     } else {
       loadingEl.textContent = data.text;
     }
@@ -2915,7 +2920,7 @@ async function setPersonalize(agree) {
   persState.enabled = agree;
   $("#personalizeToggle")?.setAttribute("aria-checked", agree ? "true" : "false");
   updateForYouBtn();
-  if (agree) { openPersOnboarding(); startPersFeed(); toast("Personalized FAAM is on ✨"); }
+  if (agree) { openPersOnboarding(); startPersFeed(); toast("Personalized FAAM is on"); }
   else { stopPersFeed(); toast("Personalization turned off"); }
 }
 function openPersOnboarding() {
@@ -2934,8 +2939,8 @@ async function savePersAnswers() {
     added = d.added || [];
   } catch { /* ignore */ }
   $("#onboardPersDialog").close();
-  if (added.length) { toast("Added " + added.join(", ") + " to your watchlist ⭐"); loadWatchlist(); }
-  else toast("Got it — FAAM will tailor things to you 🎯");
+  if (added.length) { toast("Added " + added.join(", ") + " to your watchlist"); loadWatchlist(); }
+  else toast("Got it — FAAM will tailor things to you");
   refreshPersFeed();
 }
 function reportActivity(event, symbol) {
@@ -2960,7 +2965,7 @@ function showPersPopup(c) {
   const el = document.createElement("div");
   el.className = "pers-pop" + (c.live ? " live" : "");
   el.innerHTML =
-    `<div class="pers-pop-ic">${c.icon || "✨"}</div>` +
+    `<div class="pers-pop-ic">${iconSvg(c.icon)}</div>` +
     `<div class="pers-pop-main"><div class="pers-pop-kind">${escapeHtml(c.kind || "For you")}${c.live ? ' <span class="pers-live">● LIVE</span>' : ""}</div>` +
     `<div class="pers-pop-title">${escapeHtml(c.title || "")}</div>` +
     (c.detail ? `<div class="pers-pop-detail">${escapeHtml(c.detail)}</div>` : "") + `</div>` +
@@ -2974,7 +2979,7 @@ function showPersPopup(c) {
     el.classList.add("clickable");
     el.addEventListener("click", async () => {
       for (const t of c.tickers) { try { await addTicker(t); } catch (e) {} }
-      toast("Added " + c.tickers.join(", ") + " to your watchlist ⭐");
+      toast("Added " + c.tickers.join(", ") + " to your watchlist");
       el.remove();
     });
   } else if (c.link) {
@@ -3006,19 +3011,19 @@ function renderForYou(cards, alerts) {
       const el = document.createElement("div");
       el.className = "foryou-card" + (c.live ? " live" : "");
       el.innerHTML =
-        `<div class="pers-pop-ic">${c.icon || "✨"}</div>` +
+        `<div class="pers-pop-ic">${iconSvg(c.icon)}</div>` +
         `<div class="pers-pop-main"><div class="pers-pop-kind">${escapeHtml(c.kind || "For you")}${c.live ? ' <span class="pers-live">● LIVE</span>' : ""}</div>` +
         `<div class="pers-pop-title">${escapeHtml(c.title || "")}</div>` +
         (c.detail ? `<div class="pers-pop-detail">${escapeHtml(c.detail)}</div>` : "") + `</div>`;
       if (c.symbol) { el.classList.add("clickable"); el.addEventListener("click", () => { selectStock(c.symbol); $("#forYouDialog").close(); }); }
-      else if (c.tickers) { el.classList.add("clickable"); el.addEventListener("click", async () => { for (const t of c.tickers) { try { await addTicker(t); } catch (e) {} } toast("Added " + c.tickers.join(", ") + " ⭐"); refreshForYou(); }); }
+      else if (c.tickers) { el.classList.add("clickable"); el.addEventListener("click", async () => { for (const t of c.tickers) { try { await addTicker(t); } catch (e) {} } toast("Added " + c.tickers.join(", ")); refreshForYou(); }); }
       else if (c.link) { el.classList.add("clickable"); el.addEventListener("click", () => window.open(c.link, "_blank", "noopener")); }
       wrap.appendChild(el);
     });
   }
   const al = $("#alertList");
   al.innerHTML = alerts.length
-    ? alerts.map((a) => `<div class="alert-row"><span>🔔 <b>${escapeHtml(a.symbol)}</b> ${escapeHtml(a.dir)} $${Number(a.price).toFixed(2)}</span><button class="alert-x" data-id="${escapeHtml(a.id)}" aria-label="Remove">×</button></div>`).join("")
+    ? alerts.map((a) => `<div class="alert-row"><span><span class="alert-bell">${iconSvg('bell')}</span> <b>${escapeHtml(a.symbol)}</b> ${escapeHtml(a.dir)} $${Number(a.price).toFixed(2)}</span><button class="alert-x" data-id="${escapeHtml(a.id)}" aria-label="Remove">×</button></div>`).join("")
     : '<p class="muted small" style="margin:4px 0">No alerts yet — add one below.</p>';
   al.querySelectorAll(".alert-x").forEach((b) => b.addEventListener("click", () => removeAlert(b.dataset.id)));
 }
@@ -3275,7 +3280,7 @@ function wire() {
   $("#coursePrev")?.addEventListener("click", () => { if (courseIdx > 0) { courseIdx--; renderCourse(); } });
   $("#courseNext")?.addEventListener("click", () => {
     if (courseIdx < courseData.length - 1) { courseIdx++; renderCourse(); }
-    else { $("#courseDialog").close(); toast("Course complete — nice work! 🎓"); }
+    else { $("#courseDialog").close(); toast("Course complete — nice work!"); }
   });
   $("#ideasRegen").addEventListener("click", loadIdeas);
   $("#ideasList").addEventListener("click", (e) => {

@@ -1496,6 +1496,29 @@ def titan_recall(question: str) -> dict | None:
     return None
 
 
+TITAN_SYSTEM = (
+    "You are Titan, FAAM's built-in AI analyst. Answer clearly and concisely (2-5 "
+    "sentences) in plain language, covering investing, markets, stock terms and how "
+    "FAAM works. When a question is about buying or selling, add that it's not "
+    "financial advice and that FAAM never places trades. Never mention what powers "
+    "you — you are simply Titan."
+)
+
+
+def titan_generate(question: str) -> str:
+    """Generate a fresh answer with the AI, branded as Titan. Returns '' if the AI
+    is unavailable, so callers can fall back to the teach flow."""
+    if not OPENAI_API_KEY:
+        return ""
+    try:
+        r = openai_chat([{"role": "user", "content": question}], system=TITAN_SYSTEM)
+        if "error" in r:
+            return ""
+        return (extract_text(r) or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def titan_feedback(question: str, answer: str, good: bool) -> None:
     """👍 reinforces an answer (Titan remembers it); 👎 forgets a taught answer
     for that question so it can be corrected."""
@@ -1721,7 +1744,7 @@ def personalize_feed() -> dict:
         crossed = ((al["dir"] == "above" and px >= al["price"]) or
                    (al["dir"] == "below" and px <= al["price"]))
         if crossed:
-            cards.append({"type": "alert", "icon": "🔔", "kind": "Price alert",
+            cards.append({"type": "alert", "icon": "bell", "kind": "Price alert",
                           "title": f"{al['symbol']} is {al['dir']} ${al['price']:.2f}",
                           "detail": f"Now ${px:.2f}", "symbol": al["symbol"], "live": True,
                           "priority": 3, "key": f"alert:{al['id']}"})
@@ -1736,8 +1759,7 @@ def personalize_feed() -> dict:
             mine = team and (team in g["home"].lower() or team in g["away"].lower())
             cards.append({
                 "type": "sport",
-                "icon": {"soccer": "⚽", "basketball": "🏀", "football": "🏈",
-                         "baseball": "⚾", "hockey": "🏒"}.get(lg[0], "🏆"),
+                "icon": "sport",
                 "kind": lg[1].replace(".", " ").upper() + (" · your team" if mine else ""),
                 "title": title, "detail": g.get("detail", ""), "live": g.get("live"),
                 "priority": 2 if g.get("live") else (1 if mine else 0),
@@ -1749,14 +1771,14 @@ def personalize_feed() -> dict:
         topics = [t.strip() for t in re.split(r"[,/;]| and ", it_text) if t.strip()]
         for topic in topics[:2]:
             for n in interest_news(topic, limit=1):
-                cards.append({"type": "news", "icon": "📰", "kind": topic.upper()[:18],
+                cards.append({"type": "news", "icon": "news", "kind": topic.upper()[:18],
                               "title": n["headline"], "detail": n.get("source", ""),
                               "link": n.get("link", ""), "priority": 0,
                               "key": "news:" + (n.get("link") or n["headline"])[:70]})
     # Personalized watchlist suggestion from interests
     picks = interests_to_tickers(it_text)
     if picks:
-        cards.append({"type": "watchlist", "icon": "⭐", "kind": "Made for you",
+        cards.append({"type": "watchlist", "icon": "star", "kind": "Made for you",
                       "title": "Stocks that match your interests",
                       "detail": ", ".join(picks) + " — tap to add them.",
                       "tickers": picks, "priority": 1, "key": "wl:" + ",".join(picks)})
@@ -1766,7 +1788,7 @@ def personalize_feed() -> dict:
     views = Counter(a.get("symbol") for a in act if a.get("event") == "view" and a.get("symbol"))
     if views:
         sym, n = views.most_common(1)[0]
-        cards.append({"type": "insight", "icon": "📈", "kind": "For you",
+        cards.append({"type": "insight", "icon": "chart", "kind": "For you",
                       "title": f"You've been watching {sym}",
                       "detail": f"Opened {n}× recently — check today's move.",
                       "symbol": sym, "priority": 0, "key": f"insight:{sym}:{n}"})
@@ -3886,11 +3908,18 @@ NOT FINANCIAL ADVICE.
             q = (body.get("question") or "").strip()
             if not q:
                 return self._json({"error": "empty question"}, 400)
+            # 1) fast, free recall from what Titan already knows
             recall = titan_recall(q)
             if recall:
                 return self._json({"known": True, "answer": recall["answer"],
                                    "score": recall["score"], "matched": recall["matched"],
-                                   **titan_stats()})
+                                   "source": "memory", **titan_stats()})
+            # 2) Titan is a real model — generate a fresh answer, then remember it
+            gen = titan_generate(q)
+            if gen:
+                titan_learn(q, gen)
+                return self._json({"known": True, "answer": gen, "source": "ai", **titan_stats()})
+            # 3) offline & nothing learned — fall back to the teach flow
             return self._json({"known": False, **titan_stats()})
 
         # Teach Titan an answer it didn't know — this is how it grows.
