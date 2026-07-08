@@ -1081,9 +1081,12 @@ body.beginner .beginner-banner.dismissed { display: none; }
   color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: var(--shadow-sm); }
 .bb-text { font-size: 13px; color: var(--text-2); }
 .bb-text b { color: var(--text); font-weight: 700; }
-.bb-btn { margin-left: auto; flex: none; border: 0; cursor: pointer; font-weight: 700; font-size: 12.5px; color: #fff;
+.bb-btn { flex: none; border: 0; cursor: pointer; font-weight: 700; font-size: 12.5px; color: #fff;
   background: linear-gradient(135deg, var(--accent), var(--accent-2)); padding: 8px 15px; border-radius: 9px;
   box-shadow: var(--shadow-sm); transition: transform .12s ease, box-shadow .12s ease; }
+.bb-btn:first-of-type { margin-left: auto; }
+.bb-btn:not(.bb-btn-primary) { background: var(--panel); color: var(--text-2); border: 1px solid var(--border-strong); box-shadow: none; }
+.bb-btn:not(.bb-btn-primary):hover { color: var(--text); border-color: var(--accent); }
 .bb-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
 .bb-x { flex: none; border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 5px; border-radius: 7px; line-height: 0; }
 .bb-x:hover { color: var(--text); background: var(--bg-soft); }

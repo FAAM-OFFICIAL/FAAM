@@ -542,3 +542,44 @@ section { scroll-margin-top: 84px; }
   .reveal { transition: none; opacity: 1; transform: none; }
   .btn, .nav-cta, .model-card, .feature, .price-card { transition: none; }
 }
+
+/* ── Learn / course promo ─────────────────────────────────────────────── */
+.learn { max-width: var(--maxw); margin: 0 auto; padding: 40px 24px; }
+.learn-card {
+  display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center;
+  background: linear-gradient(135deg, #EEF4FF, var(--panel));
+  border: 1px solid var(--line); border-radius: var(--r-lg); padding: 40px;
+  box-shadow: var(--shadow-card);
+}
+.learn-copy h2 { font-size: clamp(24px, 3.2vw, 34px); letter-spacing: -.02em; margin: 8px 0 12px; }
+.learn-points { list-style: none; padding: 0; margin: 18px 0 24px; display: grid; gap: 10px; }
+.learn-points li { position: relative; padding-left: 26px; color: var(--text-2); font-size: 14.5px; }
+.learn-points li::before {
+  content: ""; position: absolute; left: 0; top: 5px; width: 15px; height: 15px; border-radius: 50%;
+  background: var(--grad); box-shadow: 0 2px 8px rgba(94,116,255,.4);
+}
+.learn-points li b { color: var(--text); }
+.learn-cta { display: flex; gap: 12px; flex-wrap: wrap; }
+.learn-art { display: grid; gap: 10px; }
+.learn-art .learn-badge {
+  align-self: start; font-size: 11px; font-weight: 800; letter-spacing: .08em; color: #fff;
+  background: var(--grad); padding: 5px 11px; border-radius: 7px; margin-bottom: 4px;
+}
+.learn-lesson {
+  display: flex; align-items: center; gap: 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--r-md); padding: 13px 15px;
+  font-size: 14px; font-weight: 600; color: var(--text); box-shadow: 0 4px 16px -8px rgba(16,24,40,.18);
+}
+.learn-lesson .ll-n {
+  flex: none; width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center;
+  font-size: 13px; font-weight: 800; color: var(--blue); background: var(--accent-soft, #EEF4FF);
+}
+.learn-lesson--soon { border-style: dashed; color: var(--muted); }
+.learn-lesson--soon .ll-n { color: var(--gold); background: rgba(199,119,0,.12); }
+.learn-lesson .ll-soon {
+  margin-left: auto; font-size: 11px; font-weight: 800; letter-spacing: .04em; color: var(--gold);
+  background: rgba(199,119,0,.12); padding: 3px 9px; border-radius: 999px;
+}
+@media (max-width: 820px) {
+  .learn-card { grid-template-columns: 1fr; padding: 28px; gap: 26px; }
+}

@@ -1752,6 +1752,10 @@ def personalize_feed() -> dict:
     if lg:
         team = (prof.get("team") or "").lower()
         for g in espn_scoreboard(*lg):
+            # Only show live or upcoming games — drop finished ones (a final score
+            # from a game that ended a while ago is stale noise in a live feed).
+            if g.get("state") == "post":
+                continue
             hs, as_ = g.get("homeScore"), g.get("awayScore")
             scored = hs is not None and as_ is not None
             title = (f"{g['away']} {as_} – {hs} {g['home']}" if scored

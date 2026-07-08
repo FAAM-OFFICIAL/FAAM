@@ -2904,7 +2904,8 @@ async function loadPersonalize() {
   } catch { persState.available = false; return; }
   const row = $("#personalizeRow");
   if (row) row.hidden = !persState.available;
-  $("#personalizeToggle")?.setAttribute("aria-checked", persState.enabled ? "true" : "false");
+  const pt = $("#personalizeToggle");
+  if (pt) { pt.classList.toggle("on", !!persState.enabled); pt.setAttribute("aria-checked", persState.enabled ? "true" : "false"); }
   updateForYouBtn();
   if (persState.enabled) startPersFeed();
 }
@@ -2918,7 +2919,8 @@ async function setPersonalize(agree) {
     await fetch("/api/personalize/consent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agree }) });
   } catch { /* ignore */ }
   persState.enabled = agree;
-  $("#personalizeToggle")?.setAttribute("aria-checked", agree ? "true" : "false");
+  const pt = $("#personalizeToggle");
+  if (pt) { pt.classList.toggle("on", !!agree); pt.setAttribute("aria-checked", agree ? "true" : "false"); }
   updateForYouBtn();
   if (agree) { openPersOnboarding(); startPersFeed(); toast("Personalized FAAM is on"); }
   else { stopPersFeed(); toast("Personalization turned off"); }
@@ -3318,6 +3320,7 @@ function wire() {
   $("#beginnerToggle").addEventListener("click", toggleBeginner);
   $("#gameToggle").addEventListener("click", toggleGame);
   $("#beginnerTour").addEventListener("click", () => openCoach(0));
+  $("#beginnerCourse")?.addEventListener("click", openCourse);
   $("#beginnerBannerX").addEventListener("click", () => $("#beginnerBanner").classList.add("dismissed"));
   $("#coachClose").addEventListener("click", () => $("#coachDialog").close());
   $("#coachNext").addEventListener("click", coachNext);

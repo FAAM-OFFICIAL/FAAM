@@ -20,7 +20,10 @@ try? FileManager.default.createDirectory(atPath: faamDir, withIntermediateDirect
 // to ship a THIN CLIENT: the window talks to your hosted backend, so no local
 // server runs and no API key ever touches the user's machine. Leave it empty to
 // run the bundled Python server locally (development / self-host).
-let bakedRemoteURL = "https://faam.onrender.com"
+// Empty by default → run the bundled Python server locally (reliable, no
+// dependency on a hosted service). Point at a deployed FAAM by setting the
+// FAAM_REMOTE_URL env var (or re-baking this string) to ship a thin client.
+let bakedRemoteURL = ""
 let remoteURL: String = {
     let raw = ProcessInfo.processInfo.environment["FAAM_REMOTE_URL"].flatMap { $0.isEmpty ? nil : $0 } ?? bakedRemoteURL
     return raw.trimmingCharacters(in: CharacterSet(charactersIn: "/ \n\t"))

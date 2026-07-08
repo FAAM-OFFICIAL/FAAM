@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Learn to Invest — FAAM</title>
+<meta name="description" content="FAAM's free, plain-English course teaches you to invest from scratch — stocks, charts, risk, and your first trade. Mock trading simulator coming soon.">
+<link rel="icon" href="../favicon.svg">
+<link rel="stylesheet" href="../landing.css">
+<style>
+  /* Page-specific layout on top of the shared landing styles */
+  .learn-hero { max-width: var(--maxw); margin: 0 auto; padding: 64px 24px 24px; text-align: center; }
+  .learn-hero .kicker { justify-content: center; }
+  .learn-hero h1 { font-size: clamp(30px, 5vw, 52px); letter-spacing: -.03em; margin: 12px 0 16px; line-height: 1.05; }
+  .learn-hero p.lead { max-width: 640px; margin: 0 auto; color: var(--text-2); font-size: 16.5px; line-height: 1.6; }
+  .learn-hero .learn-cta { justify-content: center; margin-top: 28px; }
+
+  .lessons { max-width: var(--maxw); margin: 0 auto; padding: 32px 24px; }
+  .lessons-head { text-align: center; margin-bottom: 28px; }
+  .lessons-head h2 { font-size: clamp(22px, 3vw, 30px); letter-spacing: -.02em; }
+  .lesson-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .lesson-item {
+    display: flex; gap: 14px; align-items: flex-start; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--r-md); padding: 18px 20px;
+    box-shadow: 0 4px 16px -10px rgba(16,24,40,.16);
+  }
+  .lesson-item .n {
+    flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+    font-size: 14px; font-weight: 800; color: #fff; background: var(--grad);
+  }
+  .lesson-item h3 { font-size: 15.5px; margin: 3px 0 4px; letter-spacing: -.01em; }
+  .lesson-item p { font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+
+  .soon {
+    max-width: var(--maxw); margin: 8px auto 0; padding: 24px;
+  }
+  .soon-card {
+    display: flex; gap: 22px; align-items: center; flex-wrap: wrap;
+    background: linear-gradient(135deg, rgba(199,119,0,.09), var(--panel));
+    border: 1px dashed rgba(199,119,0,.5); border-radius: var(--r-lg); padding: 30px 32px;
+  }
+  .soon-badge {
+    flex: none; font-size: 12px; font-weight: 800; letter-spacing: .06em; color: var(--gold);
+    background: rgba(199,119,0,.14); padding: 7px 14px; border-radius: 999px;
+  }
+  .soon-card h2 { font-size: clamp(20px, 2.6vw, 26px); letter-spacing: -.02em; margin-bottom: 6px; }
+  .soon-card p { color: var(--text-2); font-size: 14.5px; max-width: 620px; line-height: 1.6; }
+  .soon-copy { flex: 1 1 320px; }
+
+  .learn-final { max-width: var(--maxw); margin: 0 auto; padding: 40px 24px 72px; text-align: center; }
+  .learn-final h2 { font-size: clamp(24px, 3.4vw, 36px); letter-spacing: -.02em; margin-bottom: 10px; }
+  .learn-final p { color: var(--text-2); margin-bottom: 22px; }
+  .backlink { display: inline-flex; align-items: center; gap: 6px; margin-top: 18px; color: var(--muted); font-size: 13.5px; }
+  .backlink:hover { color: var(--text); }
+
+  @media (max-width: 720px) { .lesson-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../">
+        <span class="logo-mark">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <defs><linearGradient id="lgNav" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#4f8cff"/><stop offset="100%" stop-color="#7c5cff"/>
+            </linearGradient></defs>
+            <path fill="url(#lgNav)" d="M3 21V3h2v14l5-7 4 5 7-10v16H3z"/>
+          </svg>
+        </span>
+        <span class="logo">FAAM <span class="brand-beta">BETA</span></span>
+      </a>
+      <nav class="nav-links" aria-label="Sections">
+        <a href="../#models">Models</a>
+        <a href="../#features">Features</a>
+        <a href="../#pricing">Pricing</a>
+        <a href="../#faq">FAQ</a>
+      </nav>
+      <div class="nav-actions">
+        <a class="nav-cta" href="../FAAM.zip">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- HERO -->
+    <section class="learn-hero">
+      <p class="kicker"><span class="learn-badge" style="background:var(--grad);color:#fff;padding:4px 10px;border-radius:6px;font-weight:800;letter-spacing:.06em;font-size:11px">LEARN</span></p>
+      <h1>Learn to invest, from zero.</h1>
+      <p class="lead">FAAM's beginner mode includes a free, plain-English course that takes you from “what is a stock?” all the way to placing your first trade with confidence. No jargon. No cost. Just the basics, done well.</p>
+      <div class="learn-cta">
+        <a href="../FAAM.zip" class="btn btn-primary btn-xl">Get FAAM &amp; start learning</a>
+      </div>
+    </section>
+
+    <!-- LESSONS -->
+    <section class="lessons">
+      <div class="lessons-head">
+        <p class="kicker">The course</p>
+        <h2>Eight short lessons.</h2>
+      </div>
+      <div class="lesson-grid">
+        <div class="lesson-item"><span class="n">1</span><div><h3>What investing really is</h3><p>Owning a share of a business so your money grows as it grows — not gambling, not get-rich-quick.</p></div></div>
+        <div class="lesson-item"><span class="n">2</span><div><h3>Stocks &amp; shares</h3><p>A share is a slice of ownership in a company, including a claim on its future profits.</p></div></div>
+        <div class="lesson-item"><span class="n">3</span><div><h3>The market &amp; indexes</h3><p>How millions of buyers and sellers set prices — and how one ETF can hold 500 companies at once.</p></div></div>
+        <div class="lesson-item"><span class="n">4</span><div><h3>Reading a price &amp; a chart</h3><p>What price, % change, ranges, and candles actually mean — using FAAM's live charts.</p></div></div>
+        <div class="lesson-item"><span class="n">5</span><div><h3>Risk &amp; diversification</h3><p>Why spreading your money across many things is the real fix for risk.</p></div></div>
+        <div class="lesson-item"><span class="n">6</span><div><h3>How beginners actually start</h3><p>Emergency fund, brokerage account, low-cost index funds, and dollar-cost averaging.</p></div></div>
+        <div class="lesson-item"><span class="n">7</span><div><h3>Common mistakes to avoid</h3><p>The traps that catch new investors — and simple habits that keep you out of them.</p></div></div>
+        <div class="lesson-item"><span class="n">8</span><div><h3>You're ready — a safe first step</h3><p>Put it together with a small, sensible first move you can make today.</p></div></div>
+      </div>
+    </section>
+
+    <!-- COMING SOON -->
+    <section class="soon">
+      <div class="soon-card">
+        <span class="soon-badge">COMING SOON</span>
+        <div class="soon-copy">
+          <h2>Mock trading simulator</h2>
+          <p>Practice with virtual cash and live prices — buy, sell, and watch a real portfolio move without risking a dollar. The safest way to turn what you've learned into real experience. Coming soon to FAAM beginner mode.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- FINAL CTA -->
+    <section class="learn-final">
+      <h2>Ready to start?</h2>
+      <p>Download FAAM, turn on beginner mode, and take the course at your own pace.</p>
+      <div class="learn-cta" style="justify-content:center">
+        <a href="../FAAM.zip" class="btn btn-primary btn-xl">Download FAAM for macOS</a>
+      </div>
+      <div><a class="backlink" href="../">← Back to FAAM</a></div>
+    </section>
+  </main>
+</body>
+</html>
