@@ -230,6 +230,7 @@ ADVISER_FILE = DATA_DIR / "adviser.md"
 BROKER_FILE = DATA_DIR / "broker.json"
 STRIPE_KEY_FILE = DATA_DIR / "stripe_key"
 MASSIVE_KEY_FILE = DATA_DIR / "massive_key"   # market-data key, kept off-repo
+ALPHAVANTAGE_KEY_FILE = DATA_DIR / "alphavantage_key"  # market-data key, kept off-repo
 USAGE_FILE = DATA_DIR / "usage.json"
 USERS_FILE = DATA_DIR / "users.json"
 SESSION_SECRET_FILE = DATA_DIR / "session_secret"
@@ -317,6 +318,18 @@ def massive_key() -> str:
     try:
         if MASSIVE_KEY_FILE.exists():
             return MASSIVE_KEY_FILE.read_text().strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def alphavantage_key() -> str:
+    """Alpha Vantage market-data key from env or ~/.faam/alphavantage_key (never in code)."""
+    if ALPHAVANTAGE_API_KEY:
+        return ALPHAVANTAGE_API_KEY
+    try:
+        if ALPHAVANTAGE_KEY_FILE.exists():
+            return ALPHAVANTAGE_KEY_FILE.read_text().strip()
     except Exception:  # noqa: BLE001
         pass
     return ""
@@ -780,10 +793,11 @@ _AV_INTRADAY = {"1m": "1min", "2m": "1min", "5m": "5min", "15m": "15min",
 
 
 def _quote_alphavantage(symbol: str, range_: str = "1mo", interval: str = "1d") -> dict:
-    if not ALPHAVANTAGE_API_KEY:
+    av_key = alphavantage_key()
+    if not av_key:
         return {"symbol": symbol, "error": "ALPHAVANTAGE_API_KEY not set"}
     sym = urllib.parse.quote(symbol, safe="")
-    key = urllib.parse.quote(ALPHAVANTAGE_API_KEY, safe="")
+    key = urllib.parse.quote(av_key, safe="")
     base = "https://www.alphavantage.co/query"
     if interval in _AV_INTRADAY:
         iv = _AV_INTRADAY[interval]
@@ -938,10 +952,14 @@ def _quote_massive(symbol: str, range_: str = "1mo", interval: str = "1d") -> di
 
 
 def market_provider() -> str:
-    """Which data source is active. Yahoo by default; set MARKET_DATA_PROVIDER
-    explicitly (e.g. on a hosted server) to use a licensed provider instead."""
+    """Which data source is active. An explicit MARKET_DATA_PROVIDER wins; otherwise
+    auto-pick a licensed provider when its key is present, else fall back to Yahoo."""
     if MARKET_DATA_PROVIDER in ("yahoo", "alphavantage", "finnhub", "massive"):
         return MARKET_DATA_PROVIDER
+    if alphavantage_key():
+        return "alphavantage"
+    if massive_key():
+        return "massive"
     return "yahoo"
 
 
