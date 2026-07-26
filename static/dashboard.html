@@ -205,8 +205,8 @@
     <span class="bb-icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2 1 8l11 6 9-4.9V16h2V8L12 2zM6 13.2V16l6 3.3 6-3.3v-2.8l-6 3.3-6-3.3z"/></svg>
     </span>
-    <span class="bb-text"><b>Beginner mode is on.</b> New here? Take the quick tour, then learn the basics in our free course.</span>
-    <button class="bb-btn bb-btn-primary" id="beginnerCourse" type="button">Start the course</button>
+    <span class="bb-text"><b>Beginner mode is on.</b> Start with a 10-question stock diagnostic, then follow a course matched to your level.</span>
+    <button class="bb-btn bb-btn-primary" id="beginnerCourse" type="button">Take stock diagnostic</button>
     <button class="bb-btn" id="beginnerTour" type="button">Take the tour</button>
     <button class="bb-x" id="beginnerBannerX" type="button" aria-label="Hide for now">
       <svg viewBox="0 0 24 24" width="14" height="14"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
@@ -732,20 +732,92 @@
     </div>
   </dialog>
 
-  <!-- Beginner course -->
+  <!-- Stock diagnostic + interactive course -->
   <dialog id="courseDialog" class="form-dialog course-dialog">
     <header>
-      <div class="ai-title"><span class="ai-badge learn-badge">LEARN</span><h3>Learn to invest</h3></div>
+      <div class="ai-title"><span class="ai-badge learn-badge">STOCKS</span><h3>Stock Learning Lab</h3></div>
       <button class="iconbtn" id="closeCourse" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg></button>
     </header>
+    <div class="course-shell">
+      <aside class="course-sidebar">
+        <div>
+          <p class="course-side-kicker">YOUR PATH</p>
+          <h4 id="courseSideTitle">Stock diagnostic</h4>
+          <p id="courseSideText">Find the right place to begin.</p>
+        </div>
+        <div class="course-side-stats" id="courseSideStats">
+          <div><strong>10</strong><span>Questions</span></div>
+          <div><strong>~3m</strong><span>Time</span></div>
+        </div>
+        <ol class="course-topic-list" id="courseTopicList"></ol>
+        <button type="button" class="course-practice" id="coursePractice">
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 7-7M14 8h7v7"/></svg>
+          Practice with virtual money
+        </button>
+        <button type="button" class="course-retake" id="courseRetake" hidden>Retake stock diagnostic</button>
+        <p class="course-safety">Educational placement only. Your score does not measure investing ability or predict market results.</p>
+      </aside>
+      <div class="form-body course-main">
+        <div class="course-bar" aria-label="Learning progress"><div class="course-bar-fill" id="courseFill"></div></div>
+        <div class="course-stage" id="courseStage">
+          <p class="course-kicker" id="courseKicker"></p>
+          <h4 class="course-title" id="courseTitle"></h4>
+          <p class="course-body" id="courseText"></p>
+          <div class="course-answers" id="courseAnswers"></div>
+          <div class="course-feedback" id="courseFeedback" role="status" hidden></div>
+        </div>
+        <div class="course-nav">
+          <button type="button" class="btn-ghost" id="coursePrev">← Back</button>
+          <span class="course-count muted small" id="courseCount"></span>
+          <button type="button" class="btn-go" id="courseNext">Start diagnostic →</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Practice trading — simulated account, virtual money -->
+  <dialog id="paperDialog" class="form-dialog paper-dialog">
+    <header>
+      <div class="ai-title"><span class="ai-badge paper-badge">PRACTICE</span><h3>Practice trading</h3></div>
+      <button class="iconbtn" id="closePaper" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
     <div class="form-body">
-      <div class="course-bar"><div class="course-bar-fill" id="courseFill"></div></div>
-      <h4 class="course-title" id="courseTitle"></h4>
-      <p class="course-body" id="courseText"></p>
-      <div class="course-nav">
-        <button type="button" class="btn-ghost" id="coursePrev">← Back</button>
-        <span class="course-count muted small" id="courseCount"></span>
-        <button type="button" class="btn-go" id="courseNext">Next →</button>
+      <p class="paper-lead muted small">Virtual money, real delayed prices. Nothing here is a real order — no broker, no risk. Practice the process before it counts.</p>
+
+      <div class="paper-stats" id="paperStats">
+        <div class="paper-stat"><span>Total value</span><strong id="paperEquity">—</strong></div>
+        <div class="paper-stat"><span>Cash</span><strong id="paperCash">—</strong></div>
+        <div class="paper-stat"><span>Invested</span><strong id="paperInvested">—</strong></div>
+        <div class="paper-stat"><span>Total profit / loss</span><strong id="paperPl">—</strong></div>
+      </div>
+
+      <div class="paper-ticket">
+        <div class="paper-side" role="group" aria-label="Buy or sell">
+          <button type="button" class="paper-side-btn on" id="paperBuy" aria-pressed="true">Buy</button>
+          <button type="button" class="paper-side-btn" id="paperSell" aria-pressed="false">Sell</button>
+        </div>
+        <div class="paper-fields">
+          <label class="paper-field"><span>Symbol</span><input id="paperSymbol" placeholder="AAPL" autocomplete="off" maxlength="12"></label>
+          <label class="paper-field"><span>Shares</span><input id="paperShares" type="number" min="1" step="1" value="1"></label>
+        </div>
+        <p class="paper-est muted small" id="paperEst">Enter a symbol to see an estimate.</p>
+        <button type="button" class="btn-go paper-place" id="paperPlace">Place practice trade</button>
+        <p class="paper-msg" id="paperMsg" role="status" hidden></p>
+      </div>
+
+      <div class="paper-section">
+        <div class="setting-label">Your positions</div>
+        <div id="paperPositions" class="paper-positions"></div>
+      </div>
+
+      <div class="paper-section">
+        <div class="setting-label">Recent practice trades</div>
+        <div id="paperTrades" class="paper-trades"></div>
+      </div>
+
+      <div class="paper-foot">
+        <p class="muted small">Simulated results. Delayed prices, no fees or taxes modeled. Educational only — not investment advice.</p>
+        <button type="button" class="btn-ghost paper-reset" id="paperReset">Reset account</button>
       </div>
     </div>
   </dialog>
@@ -907,10 +979,17 @@
         </div>
         <div class="addon-row" id="courseRow">
           <div class="addon-main">
-            <span class="addon-name">Learn to invest — the course</span>
-            <span class="addon-desc muted small">A short, plain-language course that takes you from zero to your first investment.</span>
+            <span class="addon-name">Stock diagnostic + course</span>
+            <span class="addon-desc muted small">Check your stock knowledge, then get a question-based learning path matched to your level.</span>
           </div>
-          <button type="button" class="ghostbtn" id="openCourseBtn">Start course →</button>
+          <button type="button" class="ghostbtn" id="openCourseBtn">Take diagnostic →</button>
+        </div>
+        <div class="addon-row" id="paperRow">
+          <div class="addon-main">
+            <span class="addon-name">Practice trading</span>
+            <span class="addon-desc muted small">A simulated $10,000 account with real delayed prices. Practice buying and selling with no money at risk.</span>
+          </div>
+          <button type="button" class="ghostbtn" id="openPaperBtn">Open simulator →</button>
         </div>
         <div class="addon-row" id="personalizeRow" hidden>
           <div class="addon-main">

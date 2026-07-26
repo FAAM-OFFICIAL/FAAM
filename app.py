@@ -68,6 +68,11 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # What's-new feed: shown in-app, and the top version drives the "new" badge.
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
+    {"version": "1.8", "date": "2026-07-09", "title": "Practice trading + interactive course", "items": [
+        {"tag": "new", "text": "Practice trading — a simulated $10,000 account with real delayed prices. Buy and sell with no money at risk."},
+        {"tag": "new", "text": "The stock course now sends you straight into the simulator to apply what you just learned."},
+        {"tag": "improved", "text": "The course places you with a 10-question diagnostic, then asks a check question after every lesson."},
+    ]},
     {"version": "1.7", "date": "2026-07-03", "title": "Learn to invest + Personalized (Beta)", "items": [
         {"tag": "new", "text": "Learn to invest — a short, plain-language course that takes you from zero to your first investment. Find it in Settings."},
         {"tag": "new", "text": "Personalized FAAM (Beta, early preview) — opt in and FAAM tailors the app to you, including proactive cards for what you follow."},
@@ -102,8 +107,7 @@ CHANGELOG = [
     ]},
 ]
 ROADMAP = [
-    {"title": "Beginner Mode course", "text": "Beginner Mode will soon have a full course for people to learn stocks on."},
-    {"title": "Mock Stock Trading", "text": "Learn to trade — practice with virtual money, risk-free."},
+    {"title": "Practice trading leagues", "text": "Compare your simulated portfolio with friends on a leaderboard."},
     {"title": "Juno", "text": "A deep model trained on historical stock data — in training now."},
     {"title": "FAAM in the cloud", "text": "Use FAAM in any browser with nothing to install."},
     {"title": "Price & news alerts", "text": "Get pinged when your stocks move or the story changes."},
@@ -1821,22 +1825,164 @@ def personalize_feed() -> dict:
 # ---------- Beginner stock course --------------------------------------------
 COURSE = [
     {"t": "Welcome — what investing really is",
-     "b": "Investing is buying a share of a business so you can grow your money as that business grows. It's not gambling and it's not get-rich-quick — it's owning good things for a long time. This short course gives you the vocabulary and confidence to start."},
+     "b": "Investing means putting money into assets that may grow or produce income over time. Unlike a savings deposit, market investments can lose value. This course builds the vocabulary and judgment to research before deciding."},
     {"t": "Stocks & shares",
-     "b": "A stock (or share) is a slice of ownership in a company. Own a share of Apple and you own a tiny piece of Apple — including a claim on its future profits. Prices move as people's expectations about the company change."},
-    {"t": "The market & indexes",
-     "b": "The 'market' is millions of buyers and sellers trading shares. An index like the S&P 500 tracks 500 big U.S. companies at once — a quick pulse of how stocks are doing overall. You can invest in a whole index with a single ETF."},
+     "b": "A stock — or share — is an ownership interest in a company. Prices move as expectations about the business, economy, and market change. Ownership can produce gains, losses, or dividends; none is guaranteed."},
+    {"t": "The market, indexes & ETFs",
+     "b": "The stock market connects buyers and sellers. An index measures a defined basket of securities. A fund can seek to track an index, and a broad fund may spread exposure across many companies. Not every ETF is broadly diversified."},
     {"t": "Reading a price & a chart",
-     "b": "Price is what one share costs right now; the % change shows today's move. A chart plots price over time — up-and-to-the-right is a rising trend. In FAAM, switch ranges (1D–5Y) and try the Candles view to see each day's high and low."},
+     "b": "A quote shows the latest reported price and change. A chart plots past prices over a selected period. Compare ranges for context, but remember that a past pattern does not promise a future result."},
     {"t": "Risk & diversification",
-     "b": "Every investment can lose value — that's risk. The fix isn't to avoid it but to spread it: owning many different things so no single loss can sink you. A broad index fund is diversified in one click. Never invest money you'll need soon."},
-    {"t": "How beginners actually start",
-     "b": "1) Build a small cash emergency fund first. 2) Open a brokerage account. 3) Start with a low-cost index fund and invest a fixed amount on a schedule (dollar-cost averaging). 4) Add individual stocks only once you understand them."},
+     "b": "Every investment carries risk. Diversification spreads exposure so one holding has less power over the whole portfolio, but it cannot eliminate market losses. Your time horizon and ability to tolerate loss should shape the amount of risk you take."},
+    {"t": "How beginners often start",
+     "b": "Build an emergency buffer, define a goal and time horizon, research costs and risks, and consider regular contributions. Dollar-cost averaging means investing equal amounts at regular intervals regardless of price; it does not guarantee a profit."},
     {"t": "Common mistakes to avoid",
-     "b": "Chasing hype, checking prices every hour, panic-selling in dips, and putting everything in one stock. The investors who do best are usually the ones who buy quality, diversify, and then leave it alone for years."},
-    {"t": "You're ready — a safe first step",
-     "b": "You now know the core ideas: shares, indexes, risk, diversification, and dollar-cost averaging. A common first move is a small, regular investment into a broad index fund. FAAM is here to help you research — but every decision is yours. Not financial advice."},
+     "b": "Common mistakes include chasing hype, overtrading, panic-selling, ignoring fees, and concentrating in one idea. A written plan makes it easier to judge the process instead of reacting to every price move."},
+    {"t": "Your next safe step",
+     "b": "You now know the core language of ownership, funds, charts, risk, diversification, and orders. Use FAAM to research and practice, verify important information, and make every final decision yourself. This is education, not personalized financial advice."},
 ]
+
+
+# ---------- Practice (paper) trading ------------------------------------------
+# A simulated account: virtual cash, real delayed prices, no broker and no real
+# money. Used by the beginner course so people can apply a lesson immediately.
+PAPER_FILE = DATA_DIR / "paper.json"
+PAPER_START_CASH = 10000.0
+PAPER_MAX_TRADES = 100
+
+
+def _paper_fresh() -> dict:
+    return {"cash": PAPER_START_CASH, "positions": {}, "trades": [],
+            "realized": 0.0, "created": int(time.time()), "resets": 0}
+
+
+def paper_account(username: str) -> dict:
+    """This user's simulated account, created on first use."""
+    d = _load_json(PAPER_FILE, {})
+    acc = d.get(username)
+    if not isinstance(acc, dict):
+        acc = _paper_fresh()
+        d[username] = acc
+        _save_json(PAPER_FILE, d)
+    acc.setdefault("cash", PAPER_START_CASH)
+    acc.setdefault("positions", {})
+    acc.setdefault("trades", [])
+    acc.setdefault("realized", 0.0)
+    return acc
+
+
+def paper_write(username: str, acc: dict) -> None:
+    d = _load_json(PAPER_FILE, {})
+    d[username] = acc
+    _save_json(PAPER_FILE, d)
+
+
+def _paper_price(symbol: str) -> float:
+    """Latest delayed price for the simulator (uses the shared quote cache)."""
+    try:
+        q = yahoo_quote(symbol, range_="5d", interval="1d")
+        if q.get("error"):
+            return 0.0
+        return float(q.get("price") or 0.0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def paper_snapshot(username: str) -> dict:
+    """Account valued at current prices: positions, equity, and profit/loss."""
+    acc = paper_account(username)
+    cash = float(acc.get("cash") or 0.0)
+    positions, invested, cost_basis = [], 0.0, 0.0
+    for sym, p in sorted((acc.get("positions") or {}).items()):
+        shares = int(p.get("shares") or 0)
+        if shares <= 0:
+            continue
+        avg = float(p.get("avg") or 0.0)
+        price = _paper_price(sym) or avg      # fall back to cost so the row still shows
+        value, cost = shares * price, shares * avg
+        pl = value - cost
+        invested += value
+        cost_basis += cost
+        positions.append({
+            "symbol": sym, "shares": shares, "avg": round(avg, 2),
+            "price": round(price, 2), "value": round(value, 2),
+            "pl": round(pl, 2), "plPct": round((pl / cost * 100.0) if cost else 0.0, 2),
+        })
+    positions.sort(key=lambda r: -r["value"])
+    equity = cash + invested
+    total_pl = equity - PAPER_START_CASH
+    return {
+        "auth": True, "cash": round(cash, 2), "invested": round(invested, 2),
+        "equity": round(equity, 2), "start": PAPER_START_CASH,
+        "totalPl": round(total_pl, 2),
+        "totalPlPct": round(total_pl / PAPER_START_CASH * 100.0, 2),
+        "openPl": round(invested - cost_basis, 2),
+        "realized": round(float(acc.get("realized") or 0.0), 2),
+        "positions": positions, "trades": (acc.get("trades") or [])[:25],
+        "tradeCount": len(acc.get("trades") or []),
+    }
+
+
+def paper_trade(username: str, symbol: str, side: str, shares: int) -> dict:
+    """Execute a simulated buy or sell at the current delayed price."""
+    sym = (symbol or "").strip().upper()[:12]
+    side = "sell" if str(side).lower() == "sell" else "buy"
+    if not sym:
+        return {"error": "Enter a stock symbol."}
+    if shares <= 0:
+        return {"error": "Enter a whole number of shares (1 or more)."}
+    price = _paper_price(sym)
+    if price <= 0:
+        return {"error": f"Couldn't get a price for {sym}. Check the symbol and try again."}
+
+    acc = paper_account(username)
+    cash = float(acc.get("cash") or 0.0)
+    pos = dict((acc.get("positions") or {}).get(sym) or {"shares": 0, "avg": 0.0})
+    held = int(pos.get("shares") or 0)
+    amount = shares * price
+    realized = 0.0
+
+    if side == "buy":
+        if amount > cash + 1e-9:
+            return {"error": f"Not enough practice cash. That costs ${amount:,.2f} and you have ${cash:,.2f}."}
+        total_cost = held * float(pos.get("avg") or 0.0) + amount
+        held += shares
+        pos = {"shares": held, "avg": total_cost / held if held else 0.0}
+        cash -= amount
+    else:
+        if shares > held:
+            return {"error": f"You only hold {held} share{'s' if held != 1 else ''} of {sym}."}
+        realized = (price - float(pos.get("avg") or 0.0)) * shares
+        held -= shares
+        pos = {"shares": held, "avg": float(pos.get("avg") or 0.0) if held else 0.0}
+        cash += amount
+        acc["realized"] = float(acc.get("realized") or 0.0) + realized
+
+    positions = dict(acc.get("positions") or {})
+    if held > 0:
+        positions[sym] = pos
+    else:
+        positions.pop(sym, None)
+    acc["positions"] = positions
+    acc["cash"] = cash
+    trade = {"id": uuid.uuid4().hex[:10], "t": int(time.time()), "symbol": sym,
+             "side": side, "shares": shares, "price": round(price, 2),
+             "amount": round(amount, 2), "realized": round(realized, 2)}
+    acc["trades"] = ([trade] + list(acc.get("trades") or []))[:PAPER_MAX_TRADES]
+    paper_write(username, acc)
+
+    verb = "Bought" if side == "buy" else "Sold"
+    return {"ok": True, "trade": trade,
+            "message": f"{verb} {shares} {sym} at ${price:,.2f} (practice)",
+            **paper_snapshot(username)}
+
+
+def paper_reset(username: str) -> dict:
+    acc = _paper_fresh()
+    prev = paper_account(username)
+    acc["resets"] = int(prev.get("resets") or 0) + 1
+    paper_write(username, acc)
+    return {"ok": True, **paper_snapshot(username)}
 
 
 def openai_chat(messages: list, system: str | None = None) -> dict:
@@ -3153,6 +3299,11 @@ NOT FINANCIAL ADVICE.
         if path == "/api/course":
             return self._json({"lessons": COURSE, "count": len(COURSE)})
 
+        if path == "/api/paper":
+            if not user:
+                return self._json({"auth": False, "start": PAPER_START_CASH})
+            return self._json(paper_snapshot(user["username"]))
+
         # Personalization (Beta) — dev/admin account only.
         if path == "/api/personalize":
             u = self._current_user()
@@ -3532,6 +3683,25 @@ NOT FINANCIAL ADVICE.
                 return self._json({"error": "Log in to play the Game of Stocks."}, 401)
             res = _game_claim(u["username"])
             return self._json(res, 200 if res.get("ok") else 400)
+
+        if path == "/api/paper/trade":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in to use practice trading."}, 401)
+            body = self._read_json()
+            try:
+                shares = int(float(body.get("shares") or 0))
+            except Exception:  # noqa: BLE001
+                shares = 0
+            res = paper_trade(u["username"], body.get("symbol") or "",
+                              body.get("side") or "buy", shares)
+            return self._json(res, 200 if res.get("ok") else 400)
+
+        if path == "/api/paper/reset":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in to use practice trading."}, 401)
+            return self._json(paper_reset(u["username"]))
 
         if path == "/api/transcribe":
             try:

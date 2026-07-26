@@ -35,13 +35,19 @@
     max-width: var(--maxw); margin: 8px auto 0; padding: 24px;
   }
   .soon-card {
-    display: flex; gap: 22px; align-items: center; flex-wrap: wrap;
-    background: linear-gradient(135deg, rgba(199,119,0,.09), var(--panel));
-    border: 1px dashed rgba(199,119,0,.5); border-radius: var(--r-lg); padding: 30px 32px;
+    display: flex; gap: 22px; align-items: flex-start; flex-wrap: wrap;
+    background: linear-gradient(135deg, rgba(7,148,85,.08), var(--panel));
+    border: 1px solid rgba(7,148,85,.35); border-radius: var(--r-lg); padding: 30px 32px;
   }
   .soon-badge {
-    flex: none; font-size: 12px; font-weight: 800; letter-spacing: .06em; color: var(--gold);
-    background: rgba(199,119,0,.14); padding: 7px 14px; border-radius: 999px;
+    flex: none; font-size: 12px; font-weight: 800; letter-spacing: .06em; color: var(--up);
+    background: rgba(7,148,85,.14); padding: 7px 14px; border-radius: 999px;
+  }
+  .soon-points { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 8px; }
+  .soon-points li { position: relative; padding-left: 24px; color: var(--text-2); font-size: 14px; }
+  .soon-points li::before {
+    content: ""; position: absolute; left: 0; top: 6px; width: 12px; height: 12px;
+    border-radius: 50%; background: var(--up); opacity: .85;
   }
   .soon-card h2 { font-size: clamp(20px, 2.6vw, 26px); letter-spacing: -.02em; margin-bottom: 6px; }
   .soon-card p { color: var(--text-2); font-size: 14.5px; max-width: 620px; line-height: 1.6; }
@@ -111,13 +117,18 @@
       </div>
     </section>
 
-    <!-- COMING SOON -->
+    <!-- PRACTICE TRADING -->
     <section class="soon">
       <div class="soon-card">
-        <span class="soon-badge">COMING SOON</span>
+        <span class="soon-badge">NOW AVAILABLE</span>
         <div class="soon-copy">
-          <h2>Mock trading simulator</h2>
-          <p>Practice with virtual cash and live prices — buy, sell, and watch a real portfolio move without risking a dollar. The safest way to turn what you've learned into real experience. Coming soon to FAAM beginner mode.</p>
+          <h2>Practice trading simulator</h2>
+          <p>Every account starts with a simulated <b>$10,000</b>. Buy and sell real tickers at live delayed prices and watch your positions, cost basis, and profit or loss move — with no broker, no card, and nothing at risk. The course drops you straight into it, so you apply each lesson the moment you learn it.</p>
+          <ul class="soon-points">
+            <li>Real symbols, real delayed prices</li>
+            <li>Tracks cost basis, open profit and loss, and every trade</li>
+            <li>Reset back to $10,000 whenever you want to start over</li>
+          </ul>
         </div>
       </div>
     </section>

@@ -2461,6 +2461,7 @@ async function loadMe() {
     state.me = d.auth ? d : null;
   } catch (e) { state.me = null; }
   renderAccount();
+  updateCourseEntryLabels();
 }
 
 function renderAccount() {
@@ -3047,25 +3048,621 @@ async function removeAlert(id) {
   refreshForYou();
 }
 
-/* ---------- Beginner course ---------- */
-let courseIdx = 0, courseData = [];
+/* ---------- Stock diagnostic + interactive course ---------- */
+const COURSE_PROGRESS_VERSION = 2;
+const STOCK_DIAGNOSTIC = [
+  {
+    topic: "Stock ownership",
+    q: "What does one share of common stock generally represent?",
+    a: ["A loan to the company", "Partial ownership in the company", "A guaranteed return", "A savings deposit"],
+    correct: 1,
+    why: "A share generally represents partial ownership. Its value can rise or fall, and returns are not guaranteed.",
+  },
+  {
+    topic: "Total return",
+    q: "Which two things can contribute to a stock investor's total return?",
+    a: ["Price changes and dividends", "Revenue and employee count", "Interest rates and share count", "Trading volume and brand value"],
+    correct: 0,
+    why: "Total return can include a price gain or loss plus dividends received during the holding period.",
+  },
+  {
+    topic: "ETFs & diversification",
+    q: "Which statement about a broad-market ETF is generally accurate?",
+    a: ["It guarantees against losses", "It holds only one company", "It can spread exposure across many companies", "It always beats individual stocks"],
+    correct: 2,
+    why: "A broad-market ETF can reduce company-specific concentration by holding many companies, but it cannot remove market risk.",
+  },
+  {
+    topic: "Percentage change",
+    q: "A stock moves from $50 to $55. What is the percentage change?",
+    a: ["5%", "10%", "11%", "55%"],
+    correct: 1,
+    why: "The $5 gain divided by the $50 starting price equals 10%.",
+  },
+  {
+    topic: "Market orders",
+    q: "What does a market order primarily prioritize?",
+    a: ["A specific execution price", "Prompt execution", "A guaranteed profit", "Avoiding every fee"],
+    correct: 1,
+    why: "A market order seeks prompt execution, but its final execution price is not guaranteed.",
+  },
+  {
+    topic: "Limit orders",
+    q: "You place a buy limit order at $40. When may it execute?",
+    a: ["Only at exactly $40", "At $40 or lower, if liquidity is available", "At any price", "Only above $40"],
+    correct: 1,
+    why: "A buy limit sets the highest price you will accept. The order may execute at $40 or lower, or may not fill at all.",
+  },
+  {
+    topic: "Time horizon",
+    q: "Which factor generally increases someone's ability to wait through short-term market swings?",
+    a: ["A longer time horizon", "A guaranteed forecast", "Checking prices more often", "Owning one company only"],
+    correct: 0,
+    why: "A longer horizon can provide more time to recover from volatility, although losses always remain possible.",
+  },
+  {
+    topic: "Unrealized P/L",
+    q: "You buy 10 shares at $25. They are now $28 and you still hold them. What is unrealized P/L?",
+    a: ["−$30", "$3", "+$30", "+$280"],
+    correct: 2,
+    why: "Ten shares multiplied by the $3 price difference equals a $30 unrealized gain before fees and taxes.",
+  },
+  {
+    topic: "Realized P/L",
+    q: "When does a stock gain or loss generally become realized?",
+    a: ["When the chart changes color", "When the position is sold", "At the end of every day", "When an order is entered"],
+    correct: 1,
+    why: "Price movement while you still hold shares is unrealized. Selling generally realizes the gain or loss.",
+  },
+  {
+    topic: "Concentration risk",
+    q: "Which portfolio is generally the most diversified?",
+    a: ["One technology stock", "Five stocks from one industry", "A fund holding many companies across industries", "The stock with the highest recent return"],
+    correct: 2,
+    why: "Exposure across many companies and industries usually reduces concentration, but diversification cannot prevent loss.",
+  },
+];
+
+const COURSE_FALLBACK = [
+  { t: "Welcome — what investing really is", b: "Investing means putting money into assets that may grow or produce income over time. Unlike a savings deposit, market investments can lose value. This course builds the vocabulary and judgment to research before deciding." },
+  { t: "Stocks & shares", b: "A stock—or share—is a slice of ownership in a company. Prices move as expectations about the business, economy, and market change. Ownership can produce gains, losses, or dividends; none is guaranteed." },
+  { t: "The market, indexes & ETFs", b: "The stock market connects buyers and sellers. An index measures a defined basket of securities. A fund can seek to track an index, and a broad fund may spread exposure across many companies." },
+  { t: "Reading a price & chart", b: "A quote shows the latest reported price and change. A chart plots past prices over a selected period. Compare ranges for context, but remember that a past pattern does not promise a future result." },
+  { t: "Risk & diversification", b: "Every investment carries risk. Diversification spreads exposure so one holding has less power over the whole portfolio. Your time horizon and ability to tolerate loss should shape the amount of risk you take." },
+  { t: "How beginners often start", b: "Build an emergency buffer, define a goal and time horizon, research costs and risks, and consider regular contributions. Dollar-cost averaging means investing equal amounts at regular intervals regardless of price." },
+  { t: "Common mistakes to avoid", b: "Common mistakes include chasing hype, overtrading, panic-selling, ignoring fees, and concentrating in one idea. A written plan makes it easier to judge the process instead of reacting to every price move." },
+  { t: "Your next safe step", b: "You now know the core language of ownership, funds, charts, risk, diversification, and orders. Use FAAM to research and practice, verify important information, and make every final decision yourself." },
+];
+
+const COURSE_CHECKS = [
+  { q: "Which statement best describes investing?", a: ["A guaranteed way to make money", "Putting money into assets with potential return and risk", "The same as an insured savings deposit", "Buying only when prices rise"], correct: 1, why: "Investing offers potential return in exchange for risk, including possible loss." },
+  { q: "What does a share of stock represent?", a: ["Partial company ownership", "A guaranteed dividend", "A bank deposit", "A fixed sale price"], correct: 0, why: "A stock is an equity security representing an ownership interest in a company." },
+  { q: "What does a stock index do?", a: ["Places trades", "Measures a defined basket", "Guarantees fund returns", "Sets every stock's price"], correct: 1, why: "An index measures the performance of a defined group of securities." },
+  { q: "What can a price chart tell you with certainty?", a: ["Tomorrow's closing price", "That a trend must continue", "How price moved in the displayed past period", "The company's fair value"], correct: 2, why: "A chart describes past price movement. It does not make a future outcome certain." },
+  { q: "What is diversification intended to reduce?", a: ["Every possible loss", "Dependence on one holding or exposure", "All market volatility", "The need to research"], correct: 1, why: "Diversification reduces concentration; it cannot eliminate market risk or all losses." },
+  { q: "What is dollar-cost averaging?", a: ["Buying only after a drop", "Investing equal amounts on a schedule", "Selling every month", "Guaranteeing a lower average price"], correct: 1, why: "Dollar-cost averaging uses equal contributions at regular intervals. It does not guarantee profit or prevent loss." },
+  { q: "Which behavior creates the clearest concentration risk?", a: ["Holding a broad basket", "Keeping an emergency fund", "Putting nearly everything in one stock", "Reviewing fees"], correct: 2, why: "A single holding can dominate the portfolio's outcome when it represents most of the exposure." },
+  { q: "Who makes the final investment decision when using FAAM?", a: ["FAAM automatically", "The forecast model", "The user", "The selected broker"], correct: 2, why: "FAAM supports research and practice. The user remains responsible for every final decision." },
+];
+
+const COURSE_TOPIC_NAMES = ["What investing is", "Stocks & ownership", "Indexes & ETFs", "Prices & charts", "Risk & diversification", "Starting with a plan", "Mistakes to avoid", "Research with FAAM"];
+
+let courseIdx = 0;
+let courseData = [];
+let courseMode = "intro";
+let courseDiagnosticIdx = 0;
+let courseDiagnosticAnswers = [];
+let courseSelected = null;
+let courseChecked = false;
+let courseProgress = null;
+
+function courseStorageKey() {
+  const account = state.me?.username || state.me?.email || "local";
+  return `faam_stock_course_v${COURSE_PROGRESS_VERSION}:${account}`;
+}
+
+function freshCourseProgress() {
+  return {
+    version: COURSE_PROGRESS_VERSION,
+    diagnosticDone: false,
+    diagnosticScore: 0,
+    level: "",
+    startIndex: 0,
+    lessonIndex: 0,
+    xp: 0,
+    completedLessons: [],
+    courseCompleted: false,
+    diagnosticAnswers: [],
+  };
+}
+
+function loadCourseProgress() {
+  const defaults = freshCourseProgress();
+  try {
+    const saved = JSON.parse(localStorage.getItem(courseStorageKey()) || "null");
+    if (!saved || saved.version !== COURSE_PROGRESS_VERSION) return defaults;
+    return {
+      ...defaults,
+      ...saved,
+      completedLessons: Array.isArray(saved.completedLessons) ? saved.completedLessons : [],
+      diagnosticAnswers: Array.isArray(saved.diagnosticAnswers) ? saved.diagnosticAnswers : [],
+    };
+  } catch { return defaults; }
+}
+
+function saveCourseProgress() {
+  if (!courseProgress) return;
+  try { localStorage.setItem(courseStorageKey(), JSON.stringify(courseProgress)); } catch { /* storage may be unavailable */ }
+}
+
+function courseBand(score) {
+  if (score <= 3) return { level: "New Explorer", start: 0, note: "Begin with ownership and the basic investing vocabulary." };
+  if (score <= 6) return { level: "Building Basics", start: 2, note: "Start with indexes, ETFs, charts, and risk." };
+  if (score <= 8) return { level: "Market Ready", start: 3, note: "Start with charts, risk, and order decisions." };
+  return { level: "Practice Ready", start: 5, note: "Begin with planning, common mistakes, and applied review." };
+}
+
 async function openCourse() {
   if (!courseData.length) {
-    try { courseData = (await (await fetch("/api/course")).json()).lessons || []; } catch { /* ignore */ }
+    try { courseData = (await (await fetch("/api/course")).json()).lessons || []; } catch { /* use local fallback */ }
+    if (!courseData.length) courseData = COURSE_FALLBACK;
   }
-  courseIdx = Math.min(parseInt(localStorage.getItem("faam_course_idx") || "0", 10) || 0, Math.max(0, courseData.length - 1));
+  courseProgress = loadCourseProgress();
+  courseDiagnosticAnswers = [...courseProgress.diagnosticAnswers];
+  courseSelected = null;
+  courseChecked = false;
+  if (!courseProgress.diagnosticDone) {
+    courseMode = "intro";
+    courseDiagnosticIdx = 0;
+  } else if (courseProgress.courseCompleted) {
+    courseMode = "complete";
+    courseIdx = Math.max(0, courseData.length - 1);
+  } else {
+    courseMode = "lesson";
+    courseIdx = Math.min(courseProgress.lessonIndex || courseProgress.startIndex || 0, Math.max(0, courseData.length - 1));
+  }
   renderCourse();
   openDialog("courseDialog");
 }
+
+function setCourseText(kicker, title, body) {
+  $("#courseKicker").textContent = kicker;
+  $("#courseTitle").textContent = title;
+  $("#courseText").textContent = body;
+}
+
+function setCourseFeedback(show, good = false, explanation = "") {
+  const feedback = $("#courseFeedback");
+  feedback.hidden = !show;
+  feedback.className = `course-feedback ${good ? "good" : "bad"}`;
+  feedback.innerHTML = show
+    ? `<strong>${good ? "Correct" : "Not quite"}</strong>${escapeHtml(explanation)}`
+    : "";
+}
+
+function courseAnswerMarkup(question) {
+  return question.a.map((answer, index) => {
+    const selected = courseSelected === index;
+    let result = "";
+    if (courseChecked && index === question.correct) result = "correct";
+    else if (courseChecked && selected) result = "wrong";
+    return `<button type="button" class="course-answer ${selected ? "selected" : ""} ${result}" data-course-answer="${index}" data-key="${String.fromCharCode(65 + index)}" ${courseChecked ? "disabled" : ""}>${escapeHtml(answer)}</button>`;
+  }).join("");
+}
+
+function renderCourseSidebar(items, activeIndex, doneIndexes = []) {
+  $("#courseTopicList").innerHTML = items.map((item, index) => {
+    const cls = index === activeIndex ? "active" : doneIndexes.includes(index) ? "done" : "";
+    return `<li class="${cls}">${escapeHtml(item)}</li>`;
+  }).join("");
+}
+
 function renderCourse() {
-  const l = courseData[courseIdx]; if (!l) return;
-  $("#courseTitle").textContent = l.t;
-  $("#courseText").textContent = l.b;
-  $("#courseCount").textContent = `Lesson ${courseIdx + 1} of ${courseData.length}`;
-  $("#courseFill").style.width = ((courseIdx + 1) / courseData.length * 100) + "%";
-  $("#coursePrev").disabled = courseIdx === 0;
-  $("#courseNext").textContent = courseIdx === courseData.length - 1 ? "Finish ✓" : "Next →";
-  try { localStorage.setItem("faam_course_idx", String(courseIdx)); } catch (e) {}
+  const answers = $("#courseAnswers");
+  const next = $("#courseNext");
+  const prev = $("#coursePrev");
+  const count = $("#courseCount");
+  const fill = $("#courseFill");
+  const retake = $("#courseRetake");
+  answers.className = "course-answers";
+  answers.innerHTML = "";
+  setCourseFeedback(false);
+  retake.hidden = true;
+
+  if (courseMode === "intro") {
+    setCourseText(
+      "Stock knowledge diagnostic",
+      "Let's find your starting point",
+      "Answer 10 short questions about stocks, returns, ETFs, charts, risk, orders, and portfolio math. Your result only personalizes where the course begins."
+    );
+    answers.className = "course-result-grid";
+    answers.innerHTML = `
+      <div class="course-result-card"><strong>10</strong><span>Stock questions</span></div>
+      <div class="course-result-card"><strong>~3 min</strong><span>One at a time</span></div>
+      <div class="course-result-card"><strong>Private</strong><span>Saved on this device</span></div>`;
+    fill.style.width = "0%";
+    count.textContent = "No FAAM product knowledge required";
+    prev.disabled = true;
+    next.disabled = false;
+    next.textContent = "Start stock diagnostic →";
+    $("#courseSideTitle").textContent = "Stock diagnostic";
+    $("#courseSideText").textContent = "Find the right place to begin.";
+    $("#courseSideStats").innerHTML = '<div><strong>10</strong><span>Questions</span></div><div><strong>~3m</strong><span>Time</span></div>';
+    renderCourseSidebar(["Ownership & returns", "ETFs & diversification", "Charts & percentages", "Order types", "Portfolio P/L"], -1);
+    return;
+  }
+
+  if (courseMode === "diagnostic") {
+    const question = STOCK_DIAGNOSTIC[courseDiagnosticIdx];
+    setCourseText(`Question ${courseDiagnosticIdx + 1} of ${STOCK_DIAGNOSTIC.length} · ${question.topic}`, question.q, "Choose the best answer.");
+    answers.innerHTML = courseAnswerMarkup(question);
+    if (courseChecked) setCourseFeedback(true, courseSelected === question.correct, question.why);
+    fill.style.width = (((courseDiagnosticIdx + (courseChecked ? 1 : 0)) / STOCK_DIAGNOSTIC.length) * 100) + "%";
+    count.textContent = `${courseDiagnosticIdx + 1} / ${STOCK_DIAGNOSTIC.length}`;
+    prev.disabled = false;
+    next.disabled = courseSelected == null;
+    next.textContent = courseChecked ? (courseDiagnosticIdx === STOCK_DIAGNOSTIC.length - 1 ? "See my result →" : "Continue →") : "Check answer";
+    $("#courseSideTitle").textContent = "Stock diagnostic";
+    $("#courseSideText").textContent = `${courseDiagnosticIdx + 1} of ${STOCK_DIAGNOSTIC.length} questions`;
+    const diagnosticGroups = ["Ownership & returns", "ETFs & diversification", "Charts & percentages", "Order types", "Portfolio P/L"];
+    renderCourseSidebar(diagnosticGroups, Math.min(4, Math.floor(courseDiagnosticIdx / 2)), Array.from({ length: Math.floor(courseDiagnosticIdx / 2) }, (_, i) => i));
+    return;
+  }
+
+  if (courseMode === "result") {
+    const band = courseBand(courseProgress.diagnosticScore);
+    const missed = STOCK_DIAGNOSTIC
+      .filter((question, index) => courseProgress.diagnosticAnswers[index] !== question.correct)
+      .map((question) => question.topic);
+    setCourseText(
+      "Your stock starting point",
+      `${courseProgress.diagnosticScore}/10 · ${band.level}`,
+      `${band.note} Your score personalizes the course; it does not measure investing ability or predict market results.`
+    );
+    answers.className = "course-result-stack";
+    answers.innerHTML = `
+      <div class="course-result-grid">
+        <div class="course-result-card"><strong>${courseProgress.diagnosticScore}/10</strong><span>Stock diagnostic</span></div>
+        <div class="course-result-card"><strong>${escapeHtml(band.level)}</strong><span>Starting level</span></div>
+        <div class="course-result-card"><strong>Lesson ${band.start + 1}</strong><span>Recommended start</span></div>
+      </div>
+      <div class="course-missed"><strong>${missed.length ? "Review areas" : "Strong foundation"}</strong><br>${missed.length ? escapeHtml(missed.join(" · ")) : "You answered every diagnostic question correctly. The course still includes quick checks for review."}</div>`;
+    fill.style.width = "100%";
+    count.textContent = "Placement complete";
+    prev.disabled = true;
+    next.disabled = false;
+    next.textContent = "Start recommended lesson →";
+    retake.hidden = false;
+    $("#courseSideTitle").textContent = band.level;
+    $("#courseSideText").textContent = band.note;
+    $("#courseSideStats").innerHTML = `<div><strong>${courseProgress.diagnosticScore}/10</strong><span>Score</span></div><div><strong>${courseProgress.xp}</strong><span>Course XP</span></div>`;
+    renderCourseSidebar(COURSE_TOPIC_NAMES, band.start, []);
+    return;
+  }
+
+  if (courseMode === "lesson") {
+    const lesson = courseData[courseIdx] || COURSE_FALLBACK[courseIdx];
+    const check = COURSE_CHECKS[courseIdx] || COURSE_CHECKS[COURSE_CHECKS.length - 1];
+    setCourseText(`Lesson ${courseIdx + 1} of ${courseData.length} · Quick check`, lesson.t, `${lesson.b}\n\n${check.q}`);
+    answers.innerHTML = courseAnswerMarkup(check);
+    if (courseChecked) setCourseFeedback(true, courseSelected === check.correct, check.why);
+    fill.style.width = (((courseIdx + (courseChecked ? 1 : 0)) / courseData.length) * 100) + "%";
+    count.textContent = `${courseProgress.xp} XP · Lesson ${courseIdx + 1}/${courseData.length}`;
+    prev.disabled = courseIdx === 0;
+    next.disabled = courseSelected == null;
+    next.textContent = courseChecked ? (courseIdx === courseData.length - 1 ? "Finish course ✓" : "Next lesson →") : "Check answer";
+    retake.hidden = false;
+    $("#courseSideTitle").textContent = courseProgress.level || "Your course";
+    $("#courseSideText").textContent = "Concept, question, feedback, repeat.";
+    $("#courseSideStats").innerHTML = `<div><strong>${courseProgress.xp}</strong><span>XP earned</span></div><div><strong>${courseProgress.completedLessons.length}/${courseData.length}</strong><span>Lessons</span></div>`;
+    const done = courseData.map((_, index) => index).filter((index) => courseProgress.completedLessons.includes(index));
+    renderCourseSidebar(COURSE_TOPIC_NAMES, courseIdx, done);
+    return;
+  }
+
+  setCourseText(
+    "Course complete",
+    "Your recommended stock path is complete",
+    "You completed the lessons selected for your starting level. You can still review every earlier lesson. Keep practicing the process: verify information, define risk, and review decisions without judging them only by profit or loss."
+  );
+  answers.className = "course-result-grid";
+  answers.innerHTML = `
+    <div class="course-result-card"><strong>${courseProgress.xp}</strong><span>Total XP</span></div>
+    <div class="course-result-card"><strong>${courseProgress.completedLessons.length}</strong><span>Lessons complete</span></div>
+    <div class="course-result-card"><strong>${courseProgress.diagnosticScore}/10</strong><span>Starting score</span></div>`;
+  fill.style.width = "100%";
+  count.textContent = "Complete · Educational use only";
+  prev.disabled = false;
+  next.disabled = false;
+  next.textContent = "Review from lesson 1 →";
+  retake.hidden = false;
+  $("#courseSideTitle").textContent = "Course complete";
+  $("#courseSideText").textContent = "Review any lesson whenever you want.";
+  $("#courseSideStats").innerHTML = `<div><strong>${courseProgress.xp}</strong><span>Total XP</span></div><div><strong>${courseProgress.completedLessons.length}/${courseData.length}</strong><span>Lessons</span></div>`;
+  renderCourseSidebar(COURSE_TOPIC_NAMES, -1, courseProgress.completedLessons);
+}
+
+function selectCourseAnswer(index) {
+  if (courseChecked || !Number.isInteger(index)) return;
+  courseSelected = index;
+  renderCourse();
+}
+
+function finishDiagnostic() {
+  const score = STOCK_DIAGNOSTIC.reduce((total, question, index) => total + (courseDiagnosticAnswers[index] === question.correct ? 1 : 0), 0);
+  const band = courseBand(score);
+  courseProgress.diagnosticDone = true;
+  courseProgress.diagnosticScore = score;
+  courseProgress.level = band.level;
+  courseProgress.startIndex = band.start;
+  courseProgress.lessonIndex = band.start;
+  courseProgress.diagnosticAnswers = [...courseDiagnosticAnswers];
+  courseProgress.courseCompleted = false;
+  saveCourseProgress();
+  courseMode = "result";
+  updateCourseEntryLabels();
+}
+
+function coursePrimaryAction() {
+  if (courseMode === "intro") {
+    courseMode = "diagnostic";
+    courseDiagnosticIdx = 0;
+    courseDiagnosticAnswers = [];
+    courseSelected = null;
+    courseChecked = false;
+  } else if (courseMode === "diagnostic") {
+    const question = STOCK_DIAGNOSTIC[courseDiagnosticIdx];
+    if (courseSelected == null) return;
+    if (!courseChecked) {
+      courseDiagnosticAnswers[courseDiagnosticIdx] = courseSelected;
+      courseChecked = true;
+    } else if (courseDiagnosticIdx < STOCK_DIAGNOSTIC.length - 1) {
+      courseDiagnosticIdx += 1;
+      courseSelected = courseDiagnosticAnswers[courseDiagnosticIdx] ?? null;
+      courseChecked = false;
+    } else {
+      finishDiagnostic();
+    }
+  } else if (courseMode === "result") {
+    courseMode = "lesson";
+    courseIdx = courseProgress.startIndex;
+    courseProgress.lessonIndex = courseIdx;
+    courseSelected = null;
+    courseChecked = false;
+    saveCourseProgress();
+  } else if (courseMode === "lesson") {
+    if (courseSelected == null) return;
+    if (!courseChecked) {
+      const check = COURSE_CHECKS[courseIdx] || COURSE_CHECKS[COURSE_CHECKS.length - 1];
+      courseChecked = true;
+      if (!courseProgress.completedLessons.includes(courseIdx)) {
+        courseProgress.xp += courseSelected === check.correct ? 10 : 5;
+        courseProgress.completedLessons.push(courseIdx);
+      }
+      saveCourseProgress();
+    } else if (courseIdx < courseData.length - 1) {
+      courseIdx += 1;
+      courseProgress.lessonIndex = courseIdx;
+      courseSelected = null;
+      courseChecked = false;
+      saveCourseProgress();
+    } else {
+      courseProgress.courseCompleted = true;
+      saveCourseProgress();
+      courseMode = "complete";
+      courseSelected = null;
+      courseChecked = false;
+      updateCourseEntryLabels();
+    }
+  } else {
+    courseProgress.courseCompleted = false;
+    courseProgress.lessonIndex = 0;
+    courseIdx = 0;
+    courseMode = "lesson";
+    courseSelected = null;
+    courseChecked = false;
+    saveCourseProgress();
+    updateCourseEntryLabels();
+  }
+  renderCourse();
+}
+
+function courseBackAction() {
+  if (courseMode === "diagnostic") {
+    if (courseDiagnosticIdx === 0) courseMode = "intro";
+    else {
+      courseDiagnosticIdx -= 1;
+      courseSelected = courseDiagnosticAnswers[courseDiagnosticIdx] ?? null;
+      courseChecked = false;
+    }
+  } else if (courseMode === "lesson" && courseIdx > 0) {
+    courseIdx -= 1;
+    courseProgress.lessonIndex = courseIdx;
+    courseSelected = null;
+    courseChecked = false;
+    saveCourseProgress();
+  } else if (courseMode === "complete") {
+    courseMode = "lesson";
+    courseIdx = Math.max(0, courseData.length - 1);
+    courseSelected = null;
+    courseChecked = false;
+  }
+  renderCourse();
+}
+
+function retakeStockDiagnostic() {
+  if (!courseProgress) courseProgress = loadCourseProgress();
+  courseProgress.diagnosticDone = false;
+  courseProgress.diagnosticScore = 0;
+  courseProgress.level = "";
+  courseProgress.startIndex = 0;
+  courseProgress.diagnosticAnswers = [];
+  courseProgress.courseCompleted = false;
+  saveCourseProgress();
+  courseMode = "intro";
+  courseDiagnosticIdx = 0;
+  courseDiagnosticAnswers = [];
+  courseSelected = null;
+  courseChecked = false;
+  updateCourseEntryLabels();
+  renderCourse();
+}
+
+function updateCourseEntryLabels() {
+  const progress = loadCourseProgress();
+  const label = !progress.diagnosticDone ? "Take stock diagnostic" : progress.courseCompleted ? "Review stock course" : "Continue stock course";
+  if ($("#beginnerCourse")) $("#beginnerCourse").textContent = label;
+  if ($("#openCourseBtn")) $("#openCourseBtn").textContent = label + " →";
+}
+
+/* ---------- Practice trading (simulated account) ----------
+   Virtual cash + real delayed prices. The course sends people here to apply a
+   lesson; nothing placed here reaches a broker. */
+let paperState = null;
+let paperSide = "buy";
+let paperEstTimer = null;
+
+async function openPaper() {
+  openDialog("paperDialog", "#paperSymbol");
+  setPaperMsg("");
+  await refreshPaper();
+}
+
+async function refreshPaper() {
+  try {
+    const r = await fetch("/api/paper");
+    paperState = await r.json();
+  } catch {
+    paperState = { error: "offline" };
+  }
+  renderPaper();
+}
+
+function setPaperMsg(text, bad = false) {
+  const el = $("#paperMsg");
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text || "";
+  el.classList.toggle("bad", !!bad);
+}
+
+function setPaperSide(side) {
+  paperSide = side === "sell" ? "sell" : "buy";
+  const buy = $("#paperBuy"), sell = $("#paperSell");
+  if (buy) { buy.classList.toggle("on", paperSide === "buy"); buy.setAttribute("aria-pressed", paperSide === "buy" ? "true" : "false"); }
+  if (sell) { sell.classList.toggle("on", paperSide === "sell"); sell.setAttribute("aria-pressed", paperSide === "sell" ? "true" : "false"); }
+  const place = $("#paperPlace");
+  if (place) place.textContent = paperSide === "buy" ? "Place practice trade" : "Sell shares";
+  updatePaperEstimate();
+}
+
+function renderPaper() {
+  const d = paperState || {};
+  const posWrap = $("#paperPositions"), trWrap = $("#paperTrades");
+  if (d.auth === false) {
+    ["paperEquity", "paperCash", "paperInvested", "paperPl"].forEach((id) => { if ($("#" + id)) $("#" + id).textContent = "—"; });
+    if (posWrap) posWrap.innerHTML = `<p class="paper-empty">Log in to use practice trading. Your simulated account is saved to your FAAM account.</p>`;
+    if (trWrap) trWrap.innerHTML = "";
+    return;
+  }
+  if ($("#paperEquity")) $("#paperEquity").textContent = fmt.money(d.equity);
+  if ($("#paperCash")) $("#paperCash").textContent = fmt.money(d.cash);
+  if ($("#paperInvested")) $("#paperInvested").textContent = fmt.money(d.invested);
+  const plEl = $("#paperPl");
+  if (plEl) {
+    const pl = d.totalPl || 0;
+    plEl.textContent = `${fmt.signedMoney(pl)} (${pl >= 0 ? "+" : "−"}${Math.abs(d.totalPlPct || 0).toFixed(2)}%)`;
+    plEl.className = pl > 0 ? "up" : pl < 0 ? "down" : "";
+  }
+
+  if (posWrap) {
+    const rows = d.positions || [];
+    posWrap.innerHTML = rows.length ? rows.map((p) => `
+      <div class="paper-pos">
+        <div class="pp-sym"><b>${escapeHtml(p.symbol)}</b><span>${p.shares} share${p.shares === 1 ? "" : "s"} · avg ${fmt.money(p.avg)}</span></div>
+        <div class="pp-val"><b>${fmt.money(p.value)}</b><span>${fmt.money(p.price)} now</span></div>
+        <div class="pp-pl ${p.pl > 0 ? "up" : p.pl < 0 ? "down" : ""}"><b>${fmt.signedMoney(p.pl)}</b><span>${p.plPct >= 0 ? "+" : "−"}${Math.abs(p.plPct).toFixed(2)}%</span></div>
+        <button type="button" class="pp-sell" data-sym="${escapeHtml(p.symbol)}" data-sh="${p.shares}">Sell</button>
+      </div>`).join("")
+      : `<p class="paper-empty">No positions yet. Buy a share above to start your practice portfolio.</p>`;
+    posWrap.querySelectorAll(".pp-sell").forEach((b) => b.addEventListener("click", () => {
+      $("#paperSymbol").value = b.dataset.sym;
+      $("#paperShares").value = b.dataset.sh;
+      setPaperSide("sell");
+      $("#paperSymbol").scrollIntoView({ block: "center", behavior: "smooth" });
+    }));
+  }
+
+  if (trWrap) {
+    const ts = d.trades || [];
+    trWrap.innerHTML = ts.length ? ts.slice(0, 8).map((t) => `
+      <div class="paper-trade">
+        <span class="pt-side ${t.side}">${t.side === "buy" ? "Buy" : "Sell"}</span>
+        <span class="pt-main"><b>${escapeHtml(t.symbol)}</b> ${t.shares} @ ${fmt.money(t.price)}</span>
+        <span class="pt-amt">${fmt.money(t.amount)}</span>
+      </div>`).join("")
+      : `<p class="paper-empty">Your practice trades will appear here.</p>`;
+  }
+}
+
+function updatePaperEstimate() {
+  const est = $("#paperEst");
+  if (!est) return;
+  const sym = ($("#paperSymbol")?.value || "").trim().toUpperCase();
+  const shares = parseInt($("#paperShares")?.value || "0", 10);
+  if (!sym || !shares || shares < 1) { est.textContent = "Enter a symbol and share count to see an estimate."; return; }
+  clearTimeout(paperEstTimer);
+  est.textContent = "Checking price…";
+  paperEstTimer = setTimeout(async () => {
+    try {
+      const q = await (await fetch(`/api/stock/${encodeURIComponent(sym)}`)).json();
+      if (q.error || !q.price) { est.textContent = `Couldn't price ${sym}.`; return; }
+      const total = q.price * shares;
+      const cash = paperState?.cash;
+      const after = paperSide === "buy" && cash != null ? ` · cash after: ${fmt.money(cash - total)}` : "";
+      est.textContent = `${shares} × ${fmt.money(q.price)} ≈ ${fmt.money(total)}${after}`;
+    } catch { est.textContent = "Couldn't check that price."; }
+  }, 350);
+}
+
+async function placePaperTrade() {
+  const sym = ($("#paperSymbol")?.value || "").trim().toUpperCase();
+  const shares = parseInt($("#paperShares")?.value || "0", 10);
+  if (!sym) { setPaperMsg("Enter a stock symbol.", true); return; }
+  if (!shares || shares < 1) { setPaperMsg("Enter a whole number of shares (1 or more).", true); return; }
+  const btn = $("#paperPlace");
+  if (btn) { btn.disabled = true; btn.textContent = "Placing…"; }
+  try {
+    const r = await fetch("/api/paper/trade", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ symbol: sym, side: paperSide, shares }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      paperState = d;
+      renderPaper();
+      setPaperMsg(d.message || "Practice trade placed.");
+      toast(d.message || "Practice trade placed");
+      updatePaperEstimate();
+    } else {
+      setPaperMsg(d.error || "That trade didn't go through.", true);
+    }
+  } catch {
+    setPaperMsg("Couldn't reach the simulator.", true);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = paperSide === "buy" ? "Place practice trade" : "Sell shares"; }
+  }
+}
+
+async function resetPaperAccount() {
+  if (!confirm("Reset your practice account back to $10,000? Your simulated positions and trade history will be cleared.")) return;
+  try {
+    const d = await (await fetch("/api/paper/reset", { method: "POST" })).json();
+    paperState = d;
+    renderPaper();
+    setPaperMsg("Practice account reset to $10,000.");
+    toast("Practice account reset");
+  } catch { setPaperMsg("Couldn't reset the account.", true); }
 }
 
 function wire() {
@@ -3279,11 +3876,14 @@ function wire() {
   // Beginner course
   $("#openCourseBtn")?.addEventListener("click", openCourse);
   $("#closeCourse")?.addEventListener("click", () => $("#courseDialog").close());
-  $("#coursePrev")?.addEventListener("click", () => { if (courseIdx > 0) { courseIdx--; renderCourse(); } });
-  $("#courseNext")?.addEventListener("click", () => {
-    if (courseIdx < courseData.length - 1) { courseIdx++; renderCourse(); }
-    else { $("#courseDialog").close(); toast("Course complete — nice work!"); }
+  $("#coursePrev")?.addEventListener("click", courseBackAction);
+  $("#courseNext")?.addEventListener("click", coursePrimaryAction);
+  $("#courseRetake")?.addEventListener("click", retakeStockDiagnostic);
+  $("#courseAnswers")?.addEventListener("click", (event) => {
+    const answer = event.target.closest("[data-course-answer]");
+    if (answer) selectCourseAnswer(parseInt(answer.dataset.courseAnswer, 10));
   });
+  updateCourseEntryLabels();
   $("#ideasRegen").addEventListener("click", loadIdeas);
   $("#ideasList").addEventListener("click", (e) => {
     const tk = e.target.closest("[data-tick]");
@@ -3321,6 +3921,19 @@ function wire() {
   $("#gameToggle").addEventListener("click", toggleGame);
   $("#beginnerTour").addEventListener("click", () => openCoach(0));
   $("#beginnerCourse")?.addEventListener("click", openCourse);
+
+  // Practice trading
+  $("#openPaperBtn")?.addEventListener("click", openPaper);
+  $("#coursePractice")?.addEventListener("click", openPaper);
+  $("#closePaper")?.addEventListener("click", () => $("#paperDialog").close());
+  $("#paperBuy")?.addEventListener("click", () => setPaperSide("buy"));
+  $("#paperSell")?.addEventListener("click", () => setPaperSide("sell"));
+  $("#paperPlace")?.addEventListener("click", placePaperTrade);
+  $("#paperReset")?.addEventListener("click", resetPaperAccount);
+  $("#paperSymbol")?.addEventListener("input", updatePaperEstimate);
+  $("#paperShares")?.addEventListener("input", updatePaperEstimate);
+  $("#paperSymbol")?.addEventListener("keydown", (e) => { if (e.key === "Enter") placePaperTrade(); });
+  $("#paperShares")?.addEventListener("keydown", (e) => { if (e.key === "Enter") placePaperTrade(); });
   $("#beginnerBannerX").addEventListener("click", () => $("#beginnerBanner").classList.add("dismissed"));
   $("#coachClose").addEventListener("click", () => $("#coachDialog").close());
   $("#coachNext").addEventListener("click", coachNext);
