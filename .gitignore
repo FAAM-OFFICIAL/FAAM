@@ -2,7 +2,10 @@
 # API keys / Stripe keys / session secrets
 key
 *.key
+*_key
 stripe_key
+massive_key
+alphavantage_key
 session_secret
 google_oauth.json
 .env
