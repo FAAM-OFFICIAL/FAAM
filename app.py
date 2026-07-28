@@ -2314,20 +2314,17 @@ if not defined PYEXE (
   exit /b 1
 )
 
-REM --- Optional FAAM AI key (enables the AI assistant; app runs without it) ---
+REM --- Keys: bundled with this download, or kept from a previous run. ---
+REM Never prompts. Stock data needs no key at all, so the dashboard is always live.
 set "FAAM_DIR=%USERPROFILE%\\.faam"
 set "FAAM_KEY=%FAAM_DIR%\\key"
+if not defined OPENAI_API_KEY if exist "%~dp0key" set /p OPENAI_API_KEY=<"%~dp0key"
 if not defined OPENAI_API_KEY if exist "%FAAM_KEY%" set /p OPENAI_API_KEY=<"%FAAM_KEY%"
-if not defined OPENAI_API_KEY (
-  echo.
-  echo   Optional: paste a FAAM AI key to switch on the AI assistant.
-  echo   Press Enter to skip - the dashboard works fully without it.
-  set /p OPENAI_API_KEY="FAAM AI key (or blank): "
-)
 if defined OPENAI_API_KEY (
   if not exist "%FAAM_DIR%" mkdir "%FAAM_DIR%" >nul 2>nul
   >"%FAAM_KEY%" echo(!OPENAI_API_KEY!
 )
+if not defined ALPHAVANTAGE_API_KEY if exist "%~dp0alphavantage_key" set /p ALPHAVANTAGE_API_KEY=<"%~dp0alphavantage_key"
 
 echo.
 echo   Starting FAAM... your browser will open automatically in a moment.
@@ -2335,7 +2332,7 @@ echo   Keep this window open while you use FAAM. Close it to quit.
 echo.
 
 REM --- Open the browser only once the server answers (runs in background) ---
-start "" /b powershell -NoProfile -WindowStyle Hidden -Command "$ErrorActionPreference='SilentlyContinue';for($i=0;$i -lt 90;$i++){try{$r=Invoke-WebRequest -UseBasicParsing 'http://localhost:8765/api/health' -TimeoutSec 1;if($r.StatusCode -eq 200){Start-Process 'http://localhost:8765/login';break}}catch{};Start-Sleep -Milliseconds 500}"
+start "" /b powershell -NoProfile -WindowStyle Hidden -Command "$ErrorActionPreference='SilentlyContinue';for($i=0;$i -lt 90;$i++){try{$r=Invoke-WebRequest -UseBasicParsing 'http://localhost:8765/api/health' -TimeoutSec 1;if($r.StatusCode -eq 200){Start-Process 'http://localhost:8765/dashboard';break}}catch{};Start-Sleep -Milliseconds 500}"
 
 %PYEXE% app.py
 echo.
@@ -2350,12 +2347,12 @@ QUICK START
 1) Install Python 3.9+ from https://www.python.org/downloads/
    IMPORTANT: tick "Add Python to PATH" during setup.
 2) Double-click  Start FAAM.bat
-3) Your browser opens to FAAM automatically once it's ready.
+3) Your browser opens straight to the FAAM dashboard once it's ready.
    Create an account or sign in, and you're in.
 
 That's it - FAAM runs locally on your PC and you use it in your browser.
-You do NOT need an FAAM AI key; add one only if you want the AI assistant
-(you can paste it when the launcher asks, or just press Enter to skip).
+Nothing to paste and no key to find: live stock prices, charts, screening and
+practice trading all work out of the box.
 
 TROUBLESHOOTING
 - "Nothing happens / it opens the Microsoft Store": Windows shipped a fake
@@ -2393,6 +2390,18 @@ def build_win_zip() -> bytes:
             p = ROOT / name
             if p.exists():
                 zf.writestr(f"FAAM/{name}", p.read_bytes())
+        # Optionally ship keys inside the download so users never paste anything.
+        # OFF unless FAAM_BUNDLE_KEYS=1: this zip is also built on demand for
+        # /download/windows, and a default-on bundle would hand this machine's
+        # private keys to anyone who hit that URL.
+        if os.environ.get("FAAM_BUNDLE_KEYS") == "1":
+            for src, name in ((DATA_DIR / "key", "key"),
+                              (ALPHAVANTAGE_KEY_FILE, "alphavantage_key")):
+                try:
+                    if src.exists() and src.read_text().strip():
+                        zf.writestr(f"FAAM/{name}", src.read_text().strip().encode("utf-8"))
+                except Exception:  # noqa: BLE001
+                    pass
         # .bat / .txt want CRLF line endings on Windows.
         zf.writestr("FAAM/Start FAAM.bat", WIN_BAT.replace("\n", "\r\n").encode("utf-8"))
         zf.writestr("FAAM/README.txt", WIN_README.replace("\n", "\r\n").encode("utf-8"))

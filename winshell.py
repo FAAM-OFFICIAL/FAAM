@@ -30,38 +30,38 @@ FAAM_DIR = Path.home() / ".faam"
 KEY_FILE = FAAM_DIR / "key"
 
 
+def _read_key(path):
+    try:
+        k = path.read_text(encoding="utf-8").strip()
+        return k or None
+    except Exception:
+        return None
+
+
 def disk_key():
-    """The FAAM AI key from the environment or a previous run (~/.faam/key)."""
+    """The FAAM AI key: environment, a key bundled in this build, or a previous
+    run (~/.faam/key). The user is never asked to paste anything."""
     env = os.environ.get("OPENAI_API_KEY")
     if env and env.strip():
         return env.strip()
-    try:
-        k = KEY_FILE.read_text(encoding="utf-8").strip()
+    # A key shipped inside the build (next to the exe / in the PyInstaller bundle).
+    for cand in (BASE / "key", Path(sys.executable).resolve().parent / "key"):
+        k = _read_key(cand)
         if k:
             return k
-    except Exception:
-        pass
+    return _read_key(KEY_FILE)
+
+
+def data_key():
+    """Optional market-data key bundled with the build (stock data works without one)."""
+    env = os.environ.get("ALPHAVANTAGE_API_KEY")
+    if env and env.strip():
+        return env.strip()
+    for cand in (BASE / "alphavantage_key", Path(sys.executable).resolve().parent / "alphavantage_key"):
+        k = _read_key(cand)
+        if k:
+            return k
     return None
-
-
-def prompt_key():
-    """First-run prompt for the FAAM AI key (tkinter ships with Python)."""
-    try:
-        import tkinter as tk
-        from tkinter import simpledialog
-        root = tk.Tk()
-        root.withdraw()
-        val = simpledialog.askstring(
-            "Welcome to FAAM",
-            "Optional: paste your FAAM AI key to enable the AI "
-            "assistant.\nLeave blank to skip — the dashboard works without it.\n"
-            "Stored only on this PC at %USERPROFILE%\\.faam\\key.",
-            show="*",
-        )
-        root.destroy()
-        return (val or "").strip() or None
-    except Exception:
-        return None
 
 
 class Api:
@@ -89,12 +89,10 @@ def wait_for_server():
 
 
 def main():
-    # The key is OPTIONAL — the dashboard runs without it; only the AI assistant
-    # needs one. We try a saved/env key, then offer a one-time prompt, but we
-    # launch FAAM either way so the app never appears "broken" with no key.
+    # No prompt, ever: FAAM opens straight into the dashboard. Stock data needs
+    # no key, so the app is fully live either way; a bundled/saved key simply
+    # also switches on the AI assistant.
     key = disk_key()
-    if not key:
-        key = prompt_key()
     if key:
         try:
             FAAM_DIR.mkdir(parents=True, exist_ok=True)
@@ -106,6 +104,9 @@ def main():
     os.environ["FAAM_PORT"] = str(PORT)
     if key:
         os.environ["OPENAI_API_KEY"] = key
+    dkey = data_key()
+    if dkey:
+        os.environ["ALPHAVANTAGE_API_KEY"] = dkey
     os.environ.setdefault("FAAM_ROOT", str(BASE))
     sys.path.insert(0, str(BASE))
 
@@ -116,7 +117,7 @@ def main():
     import webview  # pywebview → WebView2 (Edge Chromium) on Windows
     webview.create_window(
         "FAAM",
-        f"http://127.0.0.1:{PORT}/login",
+        f"http://127.0.0.1:{PORT}/dashboard",
         width=1320, height=880, min_size=(900, 600),
         js_api=Api(),
     )
