@@ -32,6 +32,10 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PORT = int(os.environ.get("PORT") or os.environ.get("FAAM_PORT") or "8765")
+# Bind to loopback by default: FAAM runs a local server on a personal machine, and
+# binding to every interface put the dashboard (and the AI key behind it) on the
+# whole Wi-Fi network. Hosted deployments set FAAM_HOST=0.0.0.0 explicitly.
+BIND_HOST = (os.environ.get("FAAM_HOST") or "127.0.0.1").strip()
 # Public origin used for outward links (Stripe checkout redirects, Google OAuth
 # callback). On a host set FAAM_BASE_URL=https://your-domain; locally it's
 # localhost so nothing changes for self-hosted/dev use.
@@ -69,13 +73,13 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
     {"version": "1.8", "date": "2026-07-09", "title": "Practice trading + interactive course", "items": [
+        {"tag": "new", "text": "FAAM Learn — a full-screen learning hub, in development now. Open it from the top bar."},
         {"tag": "new", "text": "Practice trading — a simulated $10,000 account with real delayed prices. Buy and sell with no money at risk."},
         {"tag": "new", "text": "The stock course now sends you straight into the simulator to apply what you just learned."},
         {"tag": "improved", "text": "The course places you with a 10-question diagnostic, then asks a check question after every lesson."},
     ]},
-    {"version": "1.7", "date": "2026-07-03", "title": "Learn to invest + Personalized (Beta)", "items": [
+    {"version": "1.7", "date": "2026-07-03", "title": "Learn to invest", "items": [
         {"tag": "new", "text": "Learn to invest — a short, plain-language course that takes you from zero to your first investment. Find it in Settings."},
-        {"tag": "new", "text": "Personalized FAAM (Beta, early preview) — opt in and FAAM tailors the app to you, including proactive cards for what you follow."},
     ]},
     {"version": "1.6", "date": "2026-07-02", "title": "Meet Titan 1.1 Beta", "items": [
         {"tag": "new", "text": "Titan 1.1 Beta — FAAM's own model that learns from every answer the assistant gives."},
@@ -92,7 +96,7 @@ CHANGELOG = [
         {"tag": "improved", "text": "Security hardening across the backend (request limits, safer cookies & headers)."},
     ]},
     {"version": "1.3", "date": "2026-06-18", "title": "Make it yours", "items": [
-        {"tag": "new", "text": "Customizable dashboard — build your own layout or let GPT-4.1 mini design it."},
+        {"tag": "new", "text": "Customizable dashboard — build your own layout or let FAAM AI design it."},
         {"tag": "new", "text": "The assistant can fill in order tickets for you, with your permission."},
         {"tag": "new", "text": "“Are you a robot?” verification on sign-up and sign-in."},
     ]},
@@ -1562,267 +1566,7 @@ def titan_feedback(question: str, answer: str, good: bool) -> None:
             _save_json(TITAN_FILE, kept)
 
 
-# ---------- Personalization (Beta) — dev-only agent that watches & tailors -----
-# Opt-in: the user signs a consent, answers a few questions, and a backend pass
-# uses their profile + in-app activity to surface personalized cards (incl. live
-# sports for their favorite team). Gated to the admin/dev account for now.
-PERSONALIZE_FILE = DATA_DIR / "personalize.json"
-_PERS_LOCK = threading.Lock()
-
-PERS_QUESTIONS = [
-    {"id": "sport", "q": "What's your favorite sport? (e.g. soccer, basketball, football)"},
-    {"id": "team", "q": "Any favorite team or player? (optional — helps me flag their games)"},
-    {"id": "interests", "q": "Outside of markets, what do you follow? (tech, music, gaming, cars…)"},
-    {"id": "style", "q": "How would you describe your investing style — cautious, balanced, or aggressive?"},
-]
-
-# free-text sport → (ESPN sport, league). The World Cup (fifa.world) is in season.
-_SPORT_LEAGUE = {
-    "soccer": ("soccer", "fifa.world"), "football": ("soccer", "fifa.world"),
-    "world cup": ("soccer", "fifa.world"), "futbol": ("soccer", "fifa.world"),
-    "fútbol": ("soccer", "fifa.world"), "premier": ("soccer", "eng.1"),
-    "basketball": ("basketball", "nba"), "nba": ("basketball", "nba"),
-    "american football": ("football", "nfl"), "nfl": ("football", "nfl"),
-    "baseball": ("baseball", "mlb"), "mlb": ("baseball", "mlb"),
-    "hockey": ("hockey", "nhl"), "nhl": ("hockey", "nhl"),
-}
-
-
-def personalize_load() -> dict:
-    return _load_json(PERSONALIZE_FILE,
-                      {"enabled": False, "consented": 0, "profile": {}, "activity": [], "answered": []})
-
-
-def personalize_save(d: dict) -> None:
-    with _PERS_LOCK:
-        _save_json(PERSONALIZE_FILE, d)
-
-
-def _sport_league(text: str):
-    t = (text or "").lower()
-    for k, v in _SPORT_LEAGUE.items():
-        if k in t:
-            return v
-    return None
-
-
-def espn_scoreboard(sport: str, league: str) -> list:
-    """Live/next games from ESPN's public scoreboard (no key)."""
-    try:
-        data = _http_json(
-            f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard", timeout=8)
-    except Exception:  # noqa: BLE001
-        return []
-    out = []
-    for e in (data.get("events") or [])[:8]:
-        comp = (e.get("competitions") or [{}])[0]
-        cs = comp.get("competitors") or []
-        h = next((c for c in cs if c.get("homeAway") == "home"), {})
-        a = next((c for c in cs if c.get("homeAway") == "away"), {})
-        st = (e.get("status") or {}).get("type") or {}
-        out.append({
-            "id": e.get("id"),
-            "home": (h.get("team") or {}).get("abbreviation") or (h.get("team") or {}).get("displayName") or "",
-            "away": (a.get("team") or {}).get("abbreviation") or (a.get("team") or {}).get("displayName") or "",
-            "homeScore": h.get("score"), "awayScore": a.get("score"),
-            "state": st.get("state"),                 # pre / in / post
-            "detail": st.get("shortDetail") or st.get("detail") or "",
-            "live": st.get("state") == "in",
-        })
-    return out
-
-
-def personalize_extract(answers: list) -> dict:
-    """Turn free-text answers into a structured profile — via the AI, with a
-    keyword fallback so it still works offline."""
-    prof: dict = {}
-    for a in answers:
-        i, v = a.get("id"), (a.get("answer") or "").strip()
-        if i in ("sport", "team", "interests", "style") and v:
-            prof[i] = v
-    if OPENAI_API_KEY and answers:
-        try:
-            qa = "\n".join(f"{x.get('id')}: {x.get('answer')}" for x in answers)
-            r = openai_chat(
-                [{"role": "user", "content":
-                  "From these answers, output compact JSON with keys sport (one lowercase word "
-                  "like soccer/basketball/baseball), team (string), interests (array of short "
-                  "topics), style (cautious|balanced|aggressive). Answers:\n" + qa}],
-                system="You output only minified JSON, no prose, no code fences.")
-            txt = extract_text(r)
-            mt = re.search(r"\{.*\}", txt, re.S)
-            if mt:
-                got = json.loads(mt.group(0))
-                for k in ("sport", "team", "interests", "style"):
-                    if got.get(k):
-                        prof[k] = got[k]
-        except Exception:  # noqa: BLE001
-            pass
-    return prof
-
-
-# Interests → relevant tickers, so the agent can tailor the watchlist.
-INTEREST_TICKERS = {
-    "tech": ["AAPL", "MSFT", "NVDA", "GOOGL"], "technology": ["AAPL", "MSFT", "NVDA", "GOOGL"],
-    "ai": ["NVDA", "MSFT", "PLTR"], "chip": ["NVDA", "AMD", "TSM"], "gaming": ["EA", "TTWO", "RBLX"],
-    "game": ["EA", "TTWO", "RBLX"], "music": ["SPOT", "WMG"], "movie": ["NFLX", "DIS", "WBD"],
-    "film": ["NFLX", "DIS", "WBD"], "streaming": ["NFLX", "SPOT", "DIS"], "car": ["TSLA", "F", "GM"],
-    "ev": ["TSLA", "RIVN", "GM"], "auto": ["TSLA", "F", "GM"], "sport": ["NKE", "DKNG"],
-    "crypto": ["COIN", "MSTR"], "food": ["MCD", "SBUX", "CMG"], "coffee": ["SBUX"],
-    "retail": ["AMZN", "WMT", "COST"], "energy": ["XOM", "CVX"], "space": ["RKLB", "LMT"],
-    "social": ["META", "SNAP", "PINS"], "phone": ["AAPL"], "travel": ["ABNB", "BKNG", "DAL"],
-    "airline": ["DAL", "UAL"], "bank": ["JPM", "BAC"], "finance": ["JPM", "V", "MA"],
-    "fashion": ["NKE", "LULU"], "fitness": ["NKE", "LULU", "PTON"],
-}
-_NEWS_CACHE: dict = {}
-_NEWS_TTL = 900  # 15 min
-
-
-def interests_text(prof: dict) -> str:
-    v = (prof or {}).get("interests")
-    if isinstance(v, list):
-        return " ".join(str(x) for x in v)
-    return str(v or "")
-
-
-def interests_to_tickers(text: str, limit: int = 6) -> list:
-    t = (text or "").lower()
-    seen, out = set(), []
-    for k, syms in INTEREST_TICKERS.items():
-        if k in t:
-            for s in syms:
-                if s not in seen:
-                    seen.add(s)
-                    out.append(s)
-    return out[:limit]
-
-
-def interest_news(query: str, limit: int = 1) -> list:
-    """Recent headlines for a topic via Google News RSS (free, no key), cached."""
-    key = (query or "").lower().strip()
-    if not key:
-        return []
-    now = time.time()
-    c = _NEWS_CACHE.get(key)
-    if c and now - c[0] < _NEWS_TTL:
-        return c[1][:limit]
-    import xml.etree.ElementTree as ET
-    try:
-        url = ("https://news.google.com/rss/search?q=" + urllib.parse.quote(query)
-               + "&hl=en-US&gl=US&ceid=US:en")
-        req = urllib.request.Request(url, headers={"User-Agent": "FAAM/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            root = ET.fromstring(r.read())
-    except Exception:  # noqa: BLE001
-        return []
-    out = []
-    for it in root.findall(".//item")[:6]:
-        title = (it.findtext("title") or "").strip()
-        link = (it.findtext("link") or "").strip()
-        if not title:
-            continue
-        headline, _, source = title.rpartition(" - ")
-        out.append({"headline": (headline or title)[:140], "source": source, "link": link})
-    _NEWS_CACHE[key] = (now, out)
-    return out[:limit]
-
-
-def personalize_system_suffix(user: dict) -> str:
-    """Extra system-prompt context so AI insights/chat reflect the user's profile."""
-    if not (user and user.get("admin")):
-        return ""
-    d = personalize_load()
-    if not d.get("enabled"):
-        return ""
-    p = d.get("profile") or {}
-    bits = []
-    if p.get("style"):
-        bits.append(f"investing style: {p['style']}")
-    it = interests_text(p)
-    if it:
-        bits.append(f"personal interests: {it}")
-    if not bits:
-        return ""
-    return ("\n\nThis user opted into personalization. Where it's genuinely relevant, tailor to — "
-            + "; ".join(bits) + " — but keep it natural and never force it.")
-
-
-def personalize_feed() -> dict:
-    """The 'bot' pass: build personalized cards from profile + activity + live data."""
-    d = personalize_load()
-    if not d.get("enabled"):
-        return {"enabled": False, "cards": []}
-    prof = d.get("profile") or {}
-    cards = []
-    # Price alerts — fire when the live price crosses the target (quote is cached).
-    for al in (d.get("alerts") or [])[:12]:
-        try:
-            q = yahoo_quote(al["symbol"], range_="1mo", interval="1d")
-            px = q.get("price")
-        except Exception:  # noqa: BLE001
-            px = None
-        if not px:
-            continue
-        crossed = ((al["dir"] == "above" and px >= al["price"]) or
-                   (al["dir"] == "below" and px <= al["price"]))
-        if crossed:
-            cards.append({"type": "alert", "icon": "bell", "kind": "Price alert",
-                          "title": f"{al['symbol']} is {al['dir']} ${al['price']:.2f}",
-                          "detail": f"Now ${px:.2f}", "symbol": al["symbol"], "live": True,
-                          "priority": 3, "key": f"alert:{al['id']}"})
-    lg = _sport_league(prof.get("sport"))
-    if lg:
-        team = (prof.get("team") or "").lower()
-        for g in espn_scoreboard(*lg):
-            # Only show live or upcoming games — drop finished ones (a final score
-            # from a game that ended a while ago is stale noise in a live feed).
-            if g.get("state") == "post":
-                continue
-            hs, as_ = g.get("homeScore"), g.get("awayScore")
-            scored = hs is not None and as_ is not None
-            title = (f"{g['away']} {as_} – {hs} {g['home']}" if scored
-                     else f"{g['away']} @ {g['home']}")
-            mine = team and (team in g["home"].lower() or team in g["away"].lower())
-            cards.append({
-                "type": "sport",
-                "icon": "sport",
-                "kind": lg[1].replace(".", " ").upper() + (" · your team" if mine else ""),
-                "title": title, "detail": g.get("detail", ""), "live": g.get("live"),
-                "priority": 2 if g.get("live") else (1 if mine else 0),
-                "key": f"sport:{g.get('id')}:{hs}-{as_}:{g.get('detail')}",
-            })
-    # News for the user's non-market interests (tech, music, gaming…)
-    it_text = interests_text(prof)
-    if it_text:
-        topics = [t.strip() for t in re.split(r"[,/;]| and ", it_text) if t.strip()]
-        for topic in topics[:2]:
-            for n in interest_news(topic, limit=1):
-                cards.append({"type": "news", "icon": "news", "kind": topic.upper()[:18],
-                              "title": n["headline"], "detail": n.get("source", ""),
-                              "link": n.get("link", ""), "priority": 0,
-                              "key": "news:" + (n.get("link") or n["headline"])[:70]})
-    # Personalized watchlist suggestion from interests
-    picks = interests_to_tickers(it_text)
-    if picks:
-        cards.append({"type": "watchlist", "icon": "star", "kind": "Made for you",
-                      "title": "Stocks that match your interests",
-                      "detail": ", ".join(picks) + " — tap to add them.",
-                      "tickers": picks, "priority": 1, "key": "wl:" + ",".join(picks)})
-    # Activity: most-viewed ticker
-    act = d.get("activity") or []
-    from collections import Counter
-    views = Counter(a.get("symbol") for a in act if a.get("event") == "view" and a.get("symbol"))
-    if views:
-        sym, n = views.most_common(1)[0]
-        cards.append({"type": "insight", "icon": "chart", "kind": "For you",
-                      "title": f"You've been watching {sym}",
-                      "detail": f"Opened {n}× recently — check today's move.",
-                      "symbol": sym, "priority": 0, "key": f"insight:{sym}:{n}"})
-    cards.sort(key=lambda c: -c.get("priority", 0))
-    return {"enabled": True, "cards": cards, "profile": prof, "alerts": d.get("alerts") or []}
-
-
-# ---------- Beginner stock course --------------------------------------------
+# ---------- Beginner stock course ---# ---------- Beginner stock course --------------------------------------------
 COURSE = [
     {"t": "Welcome — what investing really is",
      "b": "Investing means putting money into assets that may grow or produce income over time. Unlike a savings deposit, market investments can lose value. This course builds the vocabulary and judgment to research before deciding."},
@@ -2840,6 +2584,37 @@ def _captcha_svg(code: str) -> str:
     return "".join(parts)
 
 
+# Login throttle: slows credential stuffing even when a captcha is solved.
+_LOGIN_FAILS: dict[str, list] = {}
+_LOGIN_LOCK = threading.Lock()
+LOGIN_WINDOW = 300          # 5 minutes
+LOGIN_MAX_FAILS = 8
+
+
+def login_blocked(key: str) -> bool:
+    now = time.time()
+    with _LOGIN_LOCK:
+        hits = [t for t in _LOGIN_FAILS.get(key, []) if now - t < LOGIN_WINDOW]
+        _LOGIN_FAILS[key] = hits
+        return len(hits) >= LOGIN_MAX_FAILS
+
+
+def login_failed(key: str) -> None:
+    now = time.time()
+    with _LOGIN_LOCK:
+        hits = [t for t in _LOGIN_FAILS.get(key, []) if now - t < LOGIN_WINDOW]
+        hits.append(now)
+        _LOGIN_FAILS[key] = hits
+        if len(_LOGIN_FAILS) > 5000:                     # bound the table
+            for k in list(_LOGIN_FAILS)[:1000]:
+                _LOGIN_FAILS.pop(k, None)
+
+
+def login_ok(key: str) -> None:
+    with _LOGIN_LOCK:
+        _LOGIN_FAILS.pop(key, None)
+
+
 def make_captcha() -> dict:
     """Create a new challenge; return its id + SVG. The answer stays server-side."""
     code = "".join(secrets.choice(_CAPTCHA_ALPHABET) for _ in range(CAPTCHA_LEN))
@@ -2875,6 +2650,30 @@ def is_admin_username(username: str) -> bool:
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC), **kwargs)
+
+    def _host_allowed(self) -> bool:
+        """Reject requests whose Host isn't a local name when we're bound to
+        loopback. Without this a malicious page can point its own domain at
+        127.0.0.1 (DNS rebinding) and drive this server from the browser."""
+        if BIND_HOST not in ("127.0.0.1", "localhost"):
+            return True                       # hosted deploys serve a real domain
+        host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        return host in ("", "localhost", "127.0.0.1", "::1", "[::1]")
+
+    def _origin_allowed(self) -> bool:
+        """State-changing requests must come from FAAM itself. SameSite=Lax already
+        blocks most cross-site POSTs; this closes the rest."""
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True                       # non-browser clients send no Origin
+        try:
+            o = urllib.parse.urlparse(origin)
+        except Exception:  # noqa: BLE001
+            return False
+        if o.hostname in ("localhost", "127.0.0.1", "::1"):
+            return True
+        base = urllib.parse.urlparse(BASE_URL) if BASE_URL else None
+        return bool(base and o.hostname and o.hostname == base.hostname)
 
     # Defense-in-depth headers on every response (JSON, static, redirects).
     def end_headers(self) -> None:
@@ -3201,6 +3000,8 @@ NOT FINANCIAL ADVICE.
         self.wfile.write(body)
 
     def do_GET(self):
+        if not self._host_allowed():
+            return self._json({"error": "Invalid Host header."}, 421)
         path = self.path.split("?")[0]
         user = self._apply_user_context()
 
@@ -3292,8 +3093,8 @@ NOT FINANCIAL ADVICE.
         if path == "/api/health":
             return self._json({
                 "ok": True,
-                "model": OPENAI_MODEL,
-                "provider": "openai",
+                # The upstream model/vendor is an implementation detail; FAAM's
+                # AI is presented as FAAM's own, so don't advertise it here.
                 "ai_enabled": bool(OPENAI_API_KEY),
                 "adviser_loaded": bool(load_adviser()),
                 "voice_enabled": bool(OPENAI_API_KEY),
@@ -3312,25 +3113,6 @@ NOT FINANCIAL ADVICE.
             if not user:
                 return self._json({"auth": False, "start": PAPER_START_CASH})
             return self._json(paper_snapshot(user["username"]))
-
-        # Personalization (Beta) — dev/admin account only.
-        if path == "/api/personalize":
-            u = self._current_user()
-            if not (u and u.get("admin")):
-                return self._json({"available": False}, 403)
-            d = personalize_load()
-            return self._json({
-                "available": True, "beta": True,
-                "enabled": bool(d.get("enabled")), "consented": bool(d.get("consented")),
-                "answered": d.get("answered", []), "profile": d.get("profile", {}),
-                "questions": PERS_QUESTIONS,
-            })
-
-        if path == "/api/personalize/feed":
-            u = self._current_user()
-            if not (u and u.get("admin")):
-                return self._json({"enabled": False, "cards": []})
-            return self._json(personalize_feed())
 
         if path == "/api/adviser":
             return self._json({"text": load_adviser()})
@@ -3637,6 +3419,10 @@ NOT FINANCIAL ADVICE.
         return self._send_404()
 
     def do_POST(self):
+        if not self._host_allowed():
+            return self._json({"error": "Invalid Host header."}, 421)
+        if not self._origin_allowed():
+            return self._json({"error": "Cross-site request blocked."}, 403)
         path = self.path.split("?")[0]
         self._apply_user_context()
 
@@ -3644,6 +3430,10 @@ NOT FINANCIAL ADVICE.
             body = self._read_json()
             username = (body.get("username") or "").strip().lower()
             pw = body.get("password") or ""
+            throttle_key = f"{self.client_address[0]}|{username}"
+            if login_blocked(throttle_key):
+                return self._json(
+                    {"error": "Too many attempts. Wait a few minutes and try again."}, 429)
             # Human-verification gate — everyone except the dev/admin account.
             if not is_admin_username(username):
                 if not verify_captcha(body.get("captcha_id"), body.get("captcha_answer")):
@@ -3651,7 +3441,9 @@ NOT FINANCIAL ADVICE.
                         {"error": "Verify you're human to continue.", "captcha_required": True}, 400)
             u = load_users().get(username)
             if not u or u.get("provider") == "google" or not verify_password(pw, u.get("pw")):
+                login_failed(throttle_key)
                 return self._json({"error": "Invalid username or password."}, 401)
+            login_ok(throttle_key)
             token = make_session(username)
             return self._json(
                 {"ok": True, "username": username, "tier": int(u.get("tier") or 0), "admin": bool(u.get("admin"))},
@@ -4080,7 +3872,6 @@ NOT FINANCIAL ADVICE.
 
             user_q = next((m.get("content", "") for m in reversed(messages)
                            if m.get("role") == "user"), "")
-            system += personalize_system_suffix(self._current_user())   # tailor to profile
             result = openai_chat(messages, system=system)
             if "error" in result:
                 # OpenAI unavailable — let Titan answer from what it has learned.
@@ -4144,93 +3935,6 @@ NOT FINANCIAL ADVICE.
             titan_feedback(q, a, good)
             return self._json({"ok": True, **titan_stats()})
 
-        # ---- Personalization (Beta) — dev/admin account only ----
-        if path == "/api/personalize/consent":
-            u = self._current_user()
-            if not (u and u.get("admin")):
-                return self._json({"error": "dev only"}, 403)
-            body = self._read_json()
-            d = personalize_load()
-            if body.get("agree"):
-                d["enabled"], d["consented"] = True, int(time.time())
-            else:
-                d["enabled"] = False
-            personalize_save(d)
-            return self._json({"ok": True, "enabled": d["enabled"]})
-
-        if path == "/api/personalize/answers":
-            u = self._current_user()
-            if not (u and u.get("admin")):
-                return self._json({"error": "dev only"}, 403)
-            body = self._read_json()
-            answers = body.get("answers") or []
-            prof = personalize_extract(answers)
-            d = personalize_load()
-            d.setdefault("profile", {}).update(prof)
-            d["answered"] = [a.get("id") for a in answers if a.get("id")]
-            # First enable: auto-add tickers that match the user's interests.
-            added = []
-            if not d.get("autoadded"):
-                picks = interests_to_tickers(interests_text(d["profile"]))
-                if picks:
-                    wl = load_watchlist()
-                    for s in picks:
-                        if s not in wl:
-                            wl.append(s)
-                            added.append(s)
-                    if added:
-                        save_watchlist(wl)
-                d["autoadded"] = True
-            personalize_save(d)
-            return self._json({"ok": True, "profile": d["profile"], "added": added})
-
-        if path == "/api/personalize/alert":
-            u = self._current_user()
-            if not (u and u.get("admin")):
-                return self._json({"error": "dev only"}, 403)
-            body = self._read_json()
-            sym = (body.get("symbol") or "").strip().upper()[:12]
-            direction = body.get("dir") if body.get("dir") in ("above", "below") else "above"
-            try:
-                price = float(body.get("price"))
-            except Exception:  # noqa: BLE001
-                price = 0.0
-            if not sym or price <= 0:
-                return self._json({"error": "need a symbol and a positive price"}, 400)
-            d = personalize_load()
-            alerts = d.get("alerts") or []
-            if len(alerts) >= 12:
-                return self._json({"error": "up to 12 alerts"}, 400)
-            alerts.append({"id": str(int(time.time() * 1000)), "symbol": sym,
-                           "dir": direction, "price": price, "created": int(time.time())})
-            d["alerts"] = alerts
-            personalize_save(d)
-            return self._json({"ok": True, "alerts": alerts})
-
-        if path == "/api/personalize/alert/remove":
-            u = self._current_user()
-            if not (u and u.get("admin")):
-                return self._json({"error": "dev only"}, 403)
-            body = self._read_json()
-            aid = str(body.get("id") or "")
-            d = personalize_load()
-            d["alerts"] = [a for a in (d.get("alerts") or []) if str(a.get("id")) != aid]
-            personalize_save(d)
-            return self._json({"ok": True, "alerts": d["alerts"]})
-
-        if path == "/api/personalize/activity":
-            u = self._current_user()
-            if not (u and u.get("admin")):
-                return self._json({"ok": False})
-            d = personalize_load()
-            if d.get("enabled"):
-                body = self._read_json()
-                ev = {"event": (body.get("event") or "")[:24],
-                      "symbol": (body.get("symbol") or "")[:12].upper(), "t": int(time.time())}
-                d["activity"] = (d.get("activity") or [])[-300:] + [ev]
-                personalize_save(d)
-            return self._json({"ok": True})
-
         if path == "/api/analyze":
             if usage_blocked():
                 return self._json(USAGE_LIMIT_MSG, 402)
@@ -4261,7 +3965,7 @@ NOT FINANCIAL ADVICE.
                 "(3) primary risk. End with a one-line disclaimer."
             )
             result = openai_chat([{"role": "user", "content": prompt}],
-                                 system=effective_system() + personalize_system_suffix(self._current_user()))
+                                 system=effective_system())
             if "error" in result:
                 return self._json(result, 502)
             record_cost(chat_cost(result))
@@ -4287,18 +3991,20 @@ def main() -> None:
 """
     print(banner)
     if OPENAI_API_KEY:
-        masked = OPENAI_API_KEY[:7] + "…" + OPENAI_API_KEY[-4:]
-        print(f"   ✓ FAAM AI key loaded ({masked})")
+        print("   ✓ FAAM AI key loaded")
     else:
-        print("   ⚠ OPENAI_API_KEY not set — AI features disabled.")
-        print("     export OPENAI_API_KEY=sk-...")
-    print(f"   ✓ Model: {OPENAI_MODEL}")
+        print("   ⚠ No FAAM AI key — AI features disabled (everything else works).")
     seed_users()
     gid, _ = google_creds()
     print(f"   ✓ Accounts on · dev admin seeded (Elite) · Google sign-in: {'on' if gid else 'not configured'}")
     print(f"   → http://localhost:{PORT}\n")
 
-    with ThreadingHTTPServer(("", PORT), Handler) as httpd:
+    if BIND_HOST in ("127.0.0.1", "localhost"):
+        print("   ✓ Listening on this computer only (set FAAM_HOST=0.0.0.0 to expose it)")
+    else:
+        print(f"   ⚠ Listening on {BIND_HOST} — reachable from your network.")
+
+    with ThreadingHTTPServer((BIND_HOST, PORT), Handler) as httpd:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

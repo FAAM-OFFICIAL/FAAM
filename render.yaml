@@ -15,6 +15,9 @@ services:
       mountPath: /var/data
       sizeGB: 1
     envVars:
+      # Hosted: must listen on all interfaces (local app defaults to loopback).
+      - key: FAAM_HOST
+        value: 0.0.0.0
       - key: FAAM_DATA_DIR
         value: /var/data
       - key: PYTHON_VERSION
