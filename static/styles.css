@@ -1246,7 +1246,7 @@ body.beginner .beginner-banner.dismissed { display: none; }
   100% { box-shadow: var(--shadow-lg); }
 }
 
-/* ---------- Loading splash ("FAAM is loading…") + TikTok promo ---------- */
+/* ---------- Loading splash ("FAAM is loading…") + sponsor slot ---------- */
 .boot {
   position: fixed; inset: 0; z-index: 9000;
   display: grid; place-items: center; overflow: auto;
@@ -1278,23 +1278,44 @@ body.beginner .beginner-banner.dismissed { display: none; }
   transition: width .6s ease; animation: bootLoad 6s ease-out forwards;
 }
 
-.boot-tok {
-  text-align: left; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 18px; padding: 16px; box-shadow: var(--shadow-md); margin-bottom: 18px;
+/* Sponsor slot on the loading splash */
+.boot-ad {
+  position: relative; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 18px; padding: 12px; box-shadow: var(--shadow-md); margin-bottom: 18px;
+  overflow: hidden;
 }
-.boot-tok-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 12px; }
-.boot-tok-logo { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--text); color: #fff; flex: none; }
-.boot-tok-text { font-size: 13.5px; color: var(--text-2); }
-.boot-tok-handle { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--accent); }
-.boot-tok-embed { display: flex; justify-content: center; min-height: 120px; }
-.boot-tok-embed .tiktok-embed { margin: 0 auto !important; width: 100%; }
-.boot-tok-btn {
-  display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 12px;
-  height: 44px; border-radius: 11px; text-decoration: none; font-weight: 700; font-size: 14px;
-  color: #fff; background: linear-gradient(135deg, #ff0050, #ee1d52 55%, #69c9d0);
-  box-shadow: var(--shadow-sm); transition: filter .15s ease, transform .15s ease;
+.boot-ad-label,
+.ad-label {
+  position: absolute; top: 18px; left: 18px; z-index: 2;
+  font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
+  color: #fff; background: rgba(0, 0, 0, .55); padding: 3px 8px; border-radius: 999px;
+  backdrop-filter: blur(4px);
 }
-.boot-tok-btn:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.boot-ad-img { display: block; width: 100%; height: auto; border-radius: 12px; }
+
+/* Recurring sponsor ad */
+.ad-dialog {
+  border: 0; padding: 0; background: transparent; max-width: 640px; width: 92vw;
+  border-radius: 20px; overflow: visible;
+}
+.ad-dialog::backdrop { background: rgba(8, 12, 20, .62); backdrop-filter: blur(3px); }
+.ad-body {
+  position: relative; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 20px; padding: 12px; box-shadow: var(--shadow-lg, 0 30px 80px -20px rgba(0,0,0,.45));
+}
+.ad-img { display: block; width: 100%; height: auto; border-radius: 14px; }
+.ad-close {
+  position: absolute; top: 18px; right: 18px; z-index: 3; width: 30px; height: 30px;
+  display: grid; place-items: center; border: 0; border-radius: 50%; cursor: pointer;
+  color: #fff; background: rgba(0, 0, 0, .55); backdrop-filter: blur(4px);
+}
+.ad-close:hover { background: rgba(0, 0, 0, .78); }
+.ad-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 6px 4px; }
+.ad-dismiss { flex: none; min-width: 120px; }
+@media (max-width: 520px) {
+  .ad-foot { flex-direction: column; align-items: stretch; }
+  .ad-dismiss { width: 100%; }
+}
 
 .boot-enter {
   width: 100%; max-width: 320px; height: 46px; border: 0; border-radius: 12px; cursor: pointer;

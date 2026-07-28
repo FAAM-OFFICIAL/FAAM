@@ -21,7 +21,7 @@
   <script src="/app.js" defer></script>
 </head>
 <body class="app">
-  <!-- FAAM loading splash — shows while the dashboard boots, and promotes the TikTok -->
+  <!-- FAAM loading splash — shows while the dashboard boots, with a sponsor slot -->
   <div id="bootScreen" class="boot" role="dialog" aria-label="FAAM is loading" aria-live="polite">
     <div class="boot-inner">
       <div class="boot-brand">
@@ -37,28 +37,10 @@
       <p class="boot-sub" id="bootSub">Spinning up your financial AI dashboard…</p>
       <div class="boot-bar"><span class="boot-bar-fill" id="bootBar"></span></div>
 
-      <div class="boot-tok">
-        <div class="boot-tok-head">
-          <span class="boot-tok-logo" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16.5 3c.4 2.2 1.7 3.7 3.9 3.9v2.5c-1.3.1-2.6-.3-3.8-1v5.9c0 3.3-2.4 5.7-5.5 5.7A5.4 5.4 0 0 1 5.6 14a5.3 5.3 0 0 1 6-5.3v2.7a2.7 2.7 0 0 0-3.4 2.6 2.6 2.6 0 0 0 5.2.1V3h3.1z"/></svg>
-          </span>
-          <span class="boot-tok-text">Trending now — <strong>watch FAAM on TikTok</strong></span>
-          <span class="boot-tok-handle">@faam0fficial</span>
-        </div>
-        <div class="boot-tok-embed">
-          <blockquote class="tiktok-embed" cite="https://www.tiktok.com/@faam0fficial/video/7652156248036511006" data-video-id="7652156248036511006" style="max-width: 605px;min-width: 325px;">
-            <section>
-              <a target="_blank" title="@faam0fficial" href="https://www.tiktok.com/@faam0fficial?refer=embed">@faam0fficial</a>
-              FAAM <a title="product" target="_blank" href="https://www.tiktok.com/tag/product?refer=embed">#product</a>
-              <a title="fyp" target="_blank" href="https://www.tiktok.com/tag/fyp?refer=embed">#fyp</a>
-              <a title="viral" target="_blank" href="https://www.tiktok.com/tag/viral?refer=embed">#viral</a>
-              <a title="finance" target="_blank" href="https://www.tiktok.com/tag/finance?refer=embed">#finance</a>
-              <a title="popular" target="_blank" href="https://www.tiktok.com/tag/popular?refer=embed">#popular</a>
-              <a target="_blank" title="♬ original sound - prodbyzy4" href="https://www.tiktok.com/music/original-sound-7391823695851571974?refer=embed">♬ original sound - prodbyzy4</a>
-            </section>
-          </blockquote>
-        </div>
-        <a class="boot-tok-btn" id="bootTokBtn" href="https://www.tiktok.com/@faam0fficial/video/7652156248036511006" target="_blank" rel="noopener noreferrer">▶ Watch on TikTok</a>
+      <!-- Sponsor slot on the loading splash (hidden automatically if the image is missing) -->
+      <div class="boot-ad" id="bootAd" hidden>
+        <span class="boot-ad-label">Sponsored</span>
+        <img class="boot-ad-img" id="bootAdImg" src="ads/nutriscan.png" alt="NutriScan AI — Scan. Track. Eat Smart. Coming soon on the App Store and Google Play.">
       </div>
 
       <button type="button" class="boot-enter" id="bootEnter" disabled>Getting ready…</button>
@@ -68,7 +50,6 @@
         <button type="button" class="boot-upsell" id="bootUpsell">Upgrade to skip it ▸</button>
       </p>
     </div>
-    <script async src="https://www.tiktok.com/embed.js"></script>
   </div>
   <script>
     /* Paid tiers (Pro/Max/Elite) can remove the intro; Lite & free must watch it.
@@ -771,6 +752,21 @@
           <span class="course-count muted small" id="courseCount"></span>
           <button type="button" class="btn-go" id="courseNext">Start diagnostic →</button>
         </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Sponsor ad — shown on the loading splash and every few minutes -->
+  <dialog id="adDialog" class="ad-dialog">
+    <div class="ad-body">
+      <span class="ad-label">Sponsored</span>
+      <button type="button" class="ad-close" id="adClose" aria-label="Close ad">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <img class="ad-img" id="adImg" src="ads/nutriscan.png" alt="NutriScan AI — Scan. Track. Eat Smart. Coming soon on the App Store and Google Play.">
+      <div class="ad-foot">
+        <span class="muted small">Ads keep FAAM free while we're in beta.</span>
+        <button type="button" class="btn-go ad-dismiss" id="adDismiss">Continue</button>
       </div>
     </div>
   </dialog>

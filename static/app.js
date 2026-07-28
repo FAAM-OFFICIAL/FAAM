@@ -56,7 +56,7 @@ function escapeHtml(s) {
 
 // Open an external URL in the user's real browser. Inside the native FAAM app
 // this bridges to the host (NSWorkspace); in a browser it falls back to window.open.
-/* ---------- Loading splash ("FAAM is loading…") + TikTok promo ----------
+/* ---------- Loading splash ("FAAM is loading…") + sponsor slot ----------
    The intro/ad is mandatory on Lite & free; Pro/Max/Elite can remove it. */
 let _bootStart = 0, _bootReady = false;
 const BOOT_SKIP_TIER = 2;               // Pro and up may skip the intro
@@ -77,6 +77,65 @@ function applyBootTier() {
     else localStorage.removeItem("faam-can-skip");   // also stops the pre-paint skip
   } catch (e) {}
   renderBootTier(canSkip);
+  // Now that the real plan is known, start (or stop) the ad rotation.
+  if (canSkip) { closeAd(); const w = $("#bootAd"); if (w) w.hidden = true; }
+  startAdTimer();
+}
+
+/* ---------- Sponsor ads ----------
+   Deliberately low-frequency: one on the loading splash when you sign in, then
+   at most one every 5 minutes — and never on top of something you're doing. */
+const AD_IMAGE = "ads/nutriscan.png";
+const AD_INTERVAL_MS = 5 * 60 * 1000;
+let _adTimer = null;
+let _adImageOk = null;          // null = not probed yet
+let _adLastShown = 0;
+
+function adsEnabled() {
+  // Paid tiers already remove the mandatory intro, so they're ad-free too.
+  return (pro.tier || 0) < BOOT_SKIP_TIER;
+}
+
+// Only ever reveal a slot we know renders — a broken image looks worse than no ad.
+function probeAdImage() {
+  if (_adImageOk !== null) return Promise.resolve(_adImageOk);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => { _adImageOk = true; resolve(true); };
+    img.onerror = () => { _adImageOk = false; resolve(false); };
+    img.src = AD_IMAGE;
+  });
+}
+
+async function showBootAd() {
+  const wrap = $("#bootAd");
+  if (!wrap || !adsEnabled()) return;
+  if (await probeAdImage()) wrap.hidden = false;
+}
+
+async function showAd() {
+  if (!adsEnabled()) return;
+  if (document.hidden) return;                          // don't spend it on a hidden tab
+  if ($("#bootScreen")) return;                         // splash is already showing one
+  if (document.querySelector("dialog[open]")) return;   // never interrupt real work
+  if (Date.now() - _adLastShown < AD_INTERVAL_MS - 1000) return;
+  if (!(await probeAdImage())) return;
+  const d = $("#adDialog");
+  if (!d || d.open) return;
+  _adLastShown = Date.now();
+  openDialog("adDialog");
+}
+
+function closeAd() {
+  const d = $("#adDialog");
+  if (d && d.open) d.close();
+}
+
+function startAdTimer() {
+  if (_adTimer) clearInterval(_adTimer);
+  if (!adsEnabled()) return;
+  _adLastShown = Date.now();     // the splash ad counts as the first impression
+  _adTimer = setInterval(showAd, 30000);   // check often, gated by AD_INTERVAL_MS
 }
 
 function initBoot() {
@@ -86,8 +145,7 @@ function initBoot() {
   renderBootTier(bootCanSkip());        // fast guess from cache; loadPro confirms
   const enter = $("#bootEnter");
   if (enter) enter.addEventListener("click", dismissBoot);
-  const tok = $("#bootTokBtn");
-  if (tok) tok.addEventListener("click", (e) => { e.preventDefault(); openExternal(tok.href); });
+  showBootAd();
   const up = $("#bootUpsell");
   if (up) up.addEventListener("click", () => { dismissBoot(); if (typeof openProDialog === "function") openProDialog(); });
   b.addEventListener("click", (e) => { if (e.target === b && _bootReady) dismissBoot(); });
@@ -3921,6 +3979,10 @@ function wire() {
   $("#gameToggle").addEventListener("click", toggleGame);
   $("#beginnerTour").addEventListener("click", () => openCoach(0));
   $("#beginnerCourse")?.addEventListener("click", openCourse);
+
+  // Sponsor ads
+  $("#adClose")?.addEventListener("click", closeAd);
+  $("#adDismiss")?.addEventListener("click", closeAd);
 
   // Practice trading
   $("#openPaperBtn")?.addEventListener("click", openPaper);
