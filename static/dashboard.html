@@ -130,13 +130,6 @@
         </svg>
         <span class="adviser-dot" id="adviserDot"></span>
       </button>
-      <button class="token-chip" id="tokenChip" title="Game of Stocks" hidden>
-        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor" opacity=".25"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path fill="currentColor" d="M12 7.2a4.8 4.8 0 1 0 0 9.6 4.8 4.8 0 0 0 0-9.6zm.9 6.9h-1.8v.9h-.9v-.9H9.6v-.9h2.4a.45.45 0 0 0 0-.9h-1.5a1.35 1.35 0 0 1 0-2.7h.6V8.7h.9v.9h1.5v.9h-2.4a.45.45 0 0 0 0 .9h1.5a1.35 1.35 0 0 1 0 2.7z"/></svg>
-        <span id="tokenChipVal">0</span>
-      </button>
-      <button class="iconbtn game-btn" id="gameBtn" aria-label="Game of Stocks" title="Game of Stocks" hidden>
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 7h10a5 5 0 0 1 5 5 4 4 0 0 1-7 3l-1-1H10l-1 1a4 4 0 0 1-7-3 5 5 0 0 1 5-5zm0 3v1.5H5.5V13H7v1.5h1.5V13H10v-1.5H8.5V10H7zm9 .25a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm2 2.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>
-      </button>
       <button class="iconbtn" id="browserBtn" aria-label="Open in browser" title="Open FAAM in your web browser" hidden>
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -1180,13 +1173,7 @@
           </div>
           <button type="button" class="addon-toggle" id="beginnerToggle" role="switch" aria-checked="false" aria-label="Toggle beginner mode"><span class="addon-knob"></span></button>
         </div>
-        <div class="addon-row" id="gameRow">
-          <div class="addon-main">
-            <span class="addon-name">Game of Stocks</span>
-            <span class="addon-desc muted small">Earn tokens, build streaks, and climb the leaderboard.</span>
-          </div>
-          <button type="button" class="addon-toggle" id="gameToggle" role="switch" aria-checked="false" aria-label="Toggle Game of Stocks"><span class="addon-knob"></span></button>
-        </div>
+        
         <div class="addon-row" id="courseRow">
           <div class="addon-main">
             <span class="addon-name">Stock diagnostic + course</span>
@@ -1273,70 +1260,6 @@
     </footer>
   </dialog>
 
-  <!-- Game of Stocks -->
-  <dialog id="gameDialog" class="game-dialog">
-    <div class="game-aurora" aria-hidden="true"></div>
-    <canvas id="confettiCanvas" class="confetti-canvas" aria-hidden="true"></canvas>
-    <header class="game-head">
-      <div class="game-title">
-        <span class="game-logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#fff" d="M7 7h10a5 5 0 0 1 5 5 4 4 0 0 1-7 3l-1-1H10l-1 1a4 4 0 0 1-7-3 5 5 0 0 1 5-5zm0 3v1.5H5.5V13H7v1.5h1.5V13H10v-1.5H8.5V10H7zm9 .25a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm2 2.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>
-        </span>
-        <span>Game of Stocks</span>
-      </div>
-      <button class="iconbtn game-x" id="closeGame" aria-label="Close">
-        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
-    </header>
-    <div class="game-body">
-      <section class="g-hero">
-        <div class="g-balance">
-          <span class="g-coin" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="34" height="34"><circle cx="12" cy="12" r="11" fill="#ffd66e"/><circle cx="12" cy="12" r="8.4" fill="none" stroke="#caa024" stroke-width="1.4"/><path fill="#b8881a" d="M13 7h-1.8v1.3h-1.4a2 2 0 0 0 0 4h2.4a.55.55 0 0 1 0 1.1H8.8v1.3h2.4V17H13v-1.3h.2a2 2 0 0 0 0-4h-2.4a.55.55 0 0 1 0-1.1h3.4V9.3H13z"/></svg>
-          </span>
-          <div class="g-balance-num"><span id="gTokens">0</span><span class="g-balance-lbl">tokens</span></div>
-        </div>
-        <div class="g-level">
-          <div class="g-level-row"><b id="gLevel">Level 1</b><span class="muted small" id="gLevelMeta">0 / 200</span></div>
-          <div class="g-bar"><span class="g-bar-fill" id="gBarFill"></span></div>
-          <div class="g-rank"><span class="muted small">Rank</span> <b id="gRank">—</b> <span class="muted small" id="gPlayers"></span></div>
-        </div>
-      </section>
-
-      <section class="g-cards">
-        <div class="g-card g-daily" id="gDailyCard">
-          <div class="g-card-h"><span class="g-gift" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M20 8h-2.1a3 3 0 0 0-4.9-3.3L12 5.5l-1-.8A3 3 0 0 0 6.1 8H4a1 1 0 0 0-1 1v3h2v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7h2V9a1 1 0 0 0-1-1zm-5.5-2a1 1 0 1 1 .9 1.5L13 8V6.7a1 1 0 0 1 1.5-.7zM8.6 5.5A1 1 0 0 1 11 6.7V8l-1.4-.5A1 1 0 0 1 8.6 5.5zM11 19H7v-7h4v7zm6 0h-4v-7h4v7z"/></svg>
-          </span> Daily reward</div>
-          <button class="g-claim" id="claimBtn" type="button">Claim</button>
-          <p class="g-claim-note muted small" id="claimNote"></p>
-        </div>
-        <div class="g-card g-streak">
-          <div class="g-card-h"><span class="g-flame" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 2s5 4 5 9a5 5 0 0 1-10 0c0-1.5.6-2.7 1.3-3.6C8.7 8.5 9 10 10 10c.9 0 1-1.2.5-2.5C9.8 5.6 12 4 12 2z"/></svg>
-          </span> Streak</div>
-          <div class="g-streak-num"><span id="gStreak">0</span><span class="g-streak-unit">days</span></div>
-          <p class="muted small">Best streak <b id="gBest">0</b></p>
-        </div>
-      </section>
-
-      <section class="g-board">
-        <div class="g-card-h"><span class="g-trophy" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 4h10v2h3v2a4 4 0 0 1-4 4 5 5 0 0 1-2 1.7V17h2.5a1.5 1.5 0 0 1 1.5 1.5V20H6v-1.5A1.5 1.5 0 0 1 7.5 17H10v-3.3A5 5 0 0 1 8 12a4 4 0 0 1-4-4V6h3V4zM6 8a2 2 0 0 0 1 1.7V8H6zm12 0v1.7A2 2 0 0 0 18 8z"/></svg>
-        </span> Leaderboard</div>
-        <ol class="g-lb" id="gLeaderboard"></ol>
-      </section>
-
-      <section class="g-missions">
-        <div class="g-card-h">Ways to earn</div>
-        <ul class="g-missions-list">
-          <li><span class="g-mreward">+50</span> Claim your daily reward</li>
-          <li><span class="g-mreward">+15/day</span> Keep your streak alive</li>
-          <li><span class="g-mreward">soon</span> Predict a stock's direction and nail it</li>
-        </ul>
-      </section>
-    </div>
-  </dialog>
 
   <!-- Beginner mode coach / guided tour -->
   <dialog id="coachDialog" class="coach-dialog">

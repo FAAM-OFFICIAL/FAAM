@@ -20,8 +20,6 @@ const state = {
   predictionMarkets: false, // prediction-markets add-on (Max & Elite)
   interests: {},            // portfolio focus: themeId -> interest rating (1–5)
   beginner: false,          // beginner mode (guided tour + plain-language tips)
-  gameOn: false,            // Game of Stocks mode
-  game: null,               // game state from /api/game
   aiEnabled: false,         // server has an AI key (from /api/health)
   aiControl: false,         // user let the assistant drive the dashboard (fill orders)
 };
@@ -705,7 +703,7 @@ function renderWatchlist() {
       removeTicker(btn.dataset.remove);
     });
   });
-  $("#addTickerCard").addEventListener("click", () => openDialog("tickerDialog", "tickerSymbol"));
+  $("#addTickerCard")?.addEventListener("click", () => openDialog("tickerDialog", "tickerSymbol"));
 }
 
 async function addTicker(symbol) {
@@ -1442,7 +1440,7 @@ async function finishOnboarding() {
 }
 
 /* ===================================================================
-   Modes: Beginner (guided tour) + Game of Stocks (gamification)
+   Modes: Beginner (guided tour)
    =================================================================== */
 function reducedMotion() {
   try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; }
@@ -1450,16 +1448,11 @@ function reducedMotion() {
 
 function applyModes() {
   document.body.classList.toggle("beginner", !!state.beginner);
-  document.body.classList.toggle("game-on", !!state.gameOn);
-  const chip = $("#tokenChip"), gbtn = $("#gameBtn");
-  if (chip) chip.hidden = !state.gameOn;
-  if (gbtn) gbtn.hidden = !state.gameOn;
 }
 
 function renderModes() {
   const set = (el, on) => { if (el) { el.classList.toggle("on", !!on); el.setAttribute("aria-checked", on ? "true" : "false"); } };
   set($("#beginnerToggle"), state.beginner);
-  set($("#gameToggle"), state.gameOn);
 }
 
 function toggleBeginner() {
@@ -1470,16 +1463,6 @@ function toggleBeginner() {
   if (banner) banner.classList.remove("dismissed");
   if (state.beginner) openCoach(0);
   else toast("Beginner mode off.");
-}
-
-function toggleGame() {
-  state.gameOn = !state.gameOn;
-  try { localStorage.setItem("faam-game", state.gameOn ? "1" : "0"); } catch (e) {}
-  applyModes(); renderModes();
-  if (state.gameOn) {
-    loadGame();
-    toast("Game of Stocks on — tap the controller to play.");
-  }
 }
 
 /* ---------- AI control of the dashboard (permission-gated) ----------
@@ -1817,168 +1800,6 @@ function coachNext() {
   else { coachI++; renderCoach(); }
 }
 function coachPrev() { if (coachI > 0) { coachI--; renderCoach(); } }
-
-/* ---------- Game of Stocks ---------- */
-async function loadGame() {
-  try {
-    const r = await fetch("/api/game");
-    const d = await r.json();
-    state.game = d && d.auth ? d : null;
-  } catch (e) { state.game = null; }
-  updateTokenChip();
-  if ($("#gameDialog") && $("#gameDialog").open) renderGame();
-}
-
-function updateTokenChip() {
-  const el = $("#tokenChipVal");
-  if (!el) return;
-  const next = state.game ? state.game.tokens : 0;
-  const prev = parseInt((el.textContent || "0").replace(/[^\d]/g, ""), 10) || 0;
-  el.textContent = next.toLocaleString();
-  if (next > prev) {
-    const chip = $("#tokenChip");
-    if (chip) { chip.classList.remove("bump"); void chip.offsetWidth; chip.classList.add("bump"); }
-  }
-}
-
-async function openGame() {
-  openDialog("gameDialog");
-  renderGame();
-  await Promise.all([loadGame(), loadLeaderboard()]);
-  renderGame();
-}
-
-function renderGame() {
-  const g = state.game;
-  const btn = $("#claimBtn"), note = $("#claimNote"), card = $("#gDailyCard");
-  if (!g) {
-    $("#gTokens").textContent = "0";
-    $("#gLevel").textContent = "Level 1";
-    if (btn) { btn.disabled = true; btn.textContent = "Claim"; }
-    if (note) note.textContent = "Log in to play.";
-    return;
-  }
-  countUp($("#gTokens"), g.tokens);
-  const lv = g.level || { level: 1, into: 0, span: 200 };
-  $("#gLevel").textContent = "Level " + lv.level;
-  $("#gLevelMeta").textContent = `${lv.into} / ${lv.span}`;
-  const pct = Math.max(4, Math.round((lv.into / lv.span) * 100));
-  const f = $("#gBarFill"); if (f) f.style.width = pct + "%"; // CSS transition animates the fill
-  $("#gRank").textContent = "#" + g.rank;
-  $("#gPlayers").textContent = `of ${g.players}`;
-  $("#gStreak").textContent = g.streak;
-  $("#gBest").textContent = g.best_streak;
-  if (g.claimable) {
-    btn.disabled = false; btn.textContent = `Claim +${g.reward_preview}`;
-    card.classList.add("ready");
-    note.textContent = g.streak > 0 ? `Keep your ${g.streak}-day streak alive!` : "Start your streak today.";
-  } else {
-    btn.disabled = true; btn.textContent = "Claimed today";
-    card.classList.remove("ready");
-    note.textContent = "Come back tomorrow for more.";
-  }
-}
-
-async function loadLeaderboard() {
-  try {
-    const r = await fetch("/api/game/leaderboard");
-    const d = await r.json();
-    renderLeaderboard(d.leaderboard || []);
-  } catch (e) {}
-}
-
-function renderLeaderboard(rows) {
-  const ol = $("#gLeaderboard");
-  if (!ol) return;
-  ol.innerHTML = rows.slice(0, 10).map((r) => {
-    const badge = r.rank <= 3 ? `<span class="lb-medal m${r.rank}">${r.rank}</span>` : `<span class="lb-rank">${r.rank}</span>`;
-    const flame = r.streak > 0 ? `<svg class="lb-fl" viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path fill="currentColor" d="M12 2s5 4 5 9a5 5 0 0 1-10 0c0-1.5.6-2.7 1.3-3.6C8.7 8.5 9 10 10 10c.9 0 1-1.2.5-2.5C9.8 5.6 12 4 12 2z"/></svg>${r.streak}` : "";
-    return `<li class="lb-row${r.you ? " you" : ""}" style="--i:${Math.min(r.rank, 10)}">
-      ${badge}
-      <span class="lb-name">${escapeHtml(r.name)}${r.you ? ' <span class="lb-youtag">you</span>' : ""}</span>
-      <span class="lb-streak">${flame}</span>
-      <span class="lb-tokens">${(r.tokens || 0).toLocaleString()}</span>
-    </li>`;
-  }).join("");
-}
-
-async function claimDaily() {
-  if (!state.game) { toast("Log in to play."); return; }
-  if (!state.game.claimable) return;
-  const btn = $("#claimBtn");
-  btn.disabled = true;
-  try {
-    const r = await fetch("/api/game/claim", { method: "POST" });
-    const d = await r.json();
-    if (d.error) { toast(d.error); renderGame(); return; }
-    const before = state.game.tokens;
-    state.game = { ...state.game, ...d, claimable: false };
-    confettiBurst();
-    countUp($("#gTokens"), d.tokens, before);
-    updateTokenChip();
-    renderGame();
-    loadLeaderboard();
-    toast(`+${d.reward} tokens · ${d.streak}-day streak!`);
-  } catch (e) {
-    toast("Could not claim: " + e.message);
-    if (state.game) state.game.claimable = true;
-    renderGame();
-  }
-}
-
-function countUp(el, to, from) {
-  if (!el) return;
-  to = (+to) || 0;
-  from = from == null ? (parseInt((el.textContent || "0").replace(/[^\d-]/g, ""), 10) || 0) : from;
-  // rAF is paused while the tab is hidden — set the value directly so it's never stale.
-  if (reducedMotion() || from === to || document.hidden) { el.textContent = to.toLocaleString(); return; }
-  const t0 = performance.now(), dur = 700;
-  el.textContent = from.toLocaleString();
-  function tick(t) {
-    const p = Math.min(1, (t - t0) / dur);
-    const v = Math.round(from + (to - from) * (1 - Math.pow(1 - p, 3)));
-    el.textContent = v.toLocaleString();
-    if (p < 1) requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-}
-
-function confettiBurst() {
-  const cv = $("#confettiCanvas");
-  const dlg = $("#gameDialog");
-  if (!cv || !dlg || reducedMotion()) return;
-  const rect = dlg.getBoundingClientRect();
-  cv.width = rect.width; cv.height = rect.height;
-  const ctx = cv.getContext("2d");
-  const colors = ["#5B8BFF", "#8B6FFF", "#2ee6a8", "#ffd66e", "#ff5c7a"];
-  const parts = [];
-  for (let i = 0; i < 130; i++) {
-    parts.push({
-      x: rect.width / 2, y: rect.height * 0.3,
-      vx: (Math.random() - 0.5) * 10, vy: Math.random() * -10 - 3, g: 0.3,
-      s: 4 + Math.random() * 5, c: colors[i % colors.length],
-      r: Math.random() * Math.PI, vr: (Math.random() - 0.5) * 0.35, life: 1,
-    });
-  }
-  const t0 = performance.now();
-  function frame(t) {
-    ctx.clearRect(0, 0, cv.width, cv.height);
-    let alive = false;
-    for (const p of parts) {
-      p.vy += p.g; p.x += p.vx; p.y += p.vy; p.r += p.vr; p.life -= 0.0075;
-      if (p.life > 0 && p.y < rect.height + 24) {
-        alive = true;
-        ctx.save(); ctx.globalAlpha = Math.max(0, p.life);
-        ctx.translate(p.x, p.y); ctx.rotate(p.r);
-        ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * 0.62);
-        ctx.restore();
-      }
-    }
-    if (alive && t - t0 < 2800) requestAnimationFrame(frame);
-    else ctx.clearRect(0, 0, cv.width, cv.height);
-  }
-  requestAnimationFrame(frame);
-}
 
 /* ---------- Portfolio ---------- */
 async function loadPortfolio() {
@@ -4810,7 +4631,6 @@ function wire() {
 
   // Modes: Beginner + Game of Stocks
   $("#beginnerToggle").addEventListener("click", toggleBeginner);
-  $("#gameToggle").addEventListener("click", toggleGame);
   $("#beginnerTour").addEventListener("click", () => openCoach(0));
   $("#beginnerCourse")?.addEventListener("click", openCourse);
 
@@ -4838,10 +4658,6 @@ function wire() {
   $("#coachNext").addEventListener("click", coachNext);
   $("#coachPrev").addEventListener("click", coachPrev);
   $("#coachDialog").addEventListener("cancel", (e) => { e.preventDefault(); $("#coachDialog").close(); });
-  $("#gameBtn").addEventListener("click", openGame);
-  $("#tokenChip").addEventListener("click", openGame);
-  $("#closeGame").addEventListener("click", () => $("#gameDialog").close());
-  $("#claimBtn").addEventListener("click", claimDaily);
 
   // First-run onboarding (FAAM Assistant)
   $("#onboardSkip").addEventListener("click", skipOnboarding);
@@ -4981,7 +4797,6 @@ window.addEventListener("DOMContentLoaded", () => {
     if (sm === "apollo" || sm === "artemis" || sm === "perseverance") state.forecastModel = sm;
     state.predictionMarkets = localStorage.getItem("faam-pred-markets") === "1";
     state.beginner = localStorage.getItem("faam-beginner") === "1";
-    state.gameOn = localStorage.getItem("faam-game") === "1";
     state.aiControl = localStorage.getItem("faam-ai-control") === "1";
   } catch (e) {}
   initBoot();
@@ -4999,7 +4814,6 @@ window.addEventListener("DOMContentLoaded", () => {
   loadWatchlist();
   loadPortfolio();
   loadPro();
-  if (state.gameOn) loadGame();
   updateMarketClock();
   setInterval(updateMarketClock, 30_000);
   maybeOnboard();

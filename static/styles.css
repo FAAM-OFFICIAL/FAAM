@@ -1649,19 +1649,7 @@ input { font-family: inherit; }
 .addon-row + .addon-row { margin-top: 10px; }
 
 /* ---------- Topbar: token chip + game button ---------- */
-.token-chip {
-  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px;
-  border-radius: 999px; border: 1px solid #f0c64a; cursor: pointer;
-  background: linear-gradient(180deg, #fff8e6, #ffefc4); color: #9a6b00;
-  font-weight: 800; font-size: 13px; font-feature-settings: "tnum"; box-shadow: var(--shadow-sm);
-  transition: transform .12s ease, box-shadow .12s ease;
-}
-.token-chip:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
-.token-chip[hidden] { display: none; }
-.token-chip.bump { animation: tokbump .45s ease; }
 @keyframes tokbump { 0%, 100% { transform: none; } 35% { transform: scale(1.18); } }
-.game-btn { color: var(--accent-2); }
-.game-btn[hidden] { display: none; }
 
 /* ---------- Beginner banner ---------- */
 .beginner-banner { display: none; }
@@ -1687,31 +1675,8 @@ body.beginner .beginner-banner.dismissed { display: none; }
 .bb-x:hover { color: var(--text); background: var(--bg-soft); }
 
 /* ---------- Game dialog (light — matches the dashboard theme) ---------- */
-.game-dialog {
-  position: relative; width: min(440px, 94vw); max-height: 88vh; overflow: hidden;
-  border: 1px solid var(--border); border-radius: 22px; padding: 0; color: var(--text); background: var(--panel);
-  box-shadow: var(--shadow-lg);
-}
-.game-dialog[open] { display: flex; flex-direction: column; }
-.game-dialog::backdrop { background: rgba(8, 12, 20, .35); backdrop-filter: blur(3px); }
-.game-dialog .muted { color: var(--muted); }
-.game-aurora {
-  position: absolute; inset: -45% -20% auto -20%; height: 70%; z-index: 0; pointer-events: none; filter: blur(28px);
-  background:
-    radial-gradient(40% 60% at 28% 16%, rgba(91, 139, 255, .20), transparent 60%),
-    radial-gradient(45% 60% at 76% 10%, rgba(139, 111, 255, .20), transparent 60%),
-    radial-gradient(40% 50% at 60% 62%, rgba(46, 230, 168, .12), transparent 60%);
-  animation: aurora 14s ease-in-out infinite alternate;
-}
 @keyframes aurora { from { transform: translateY(-6%) scale(1); } to { transform: translateY(6%) scale(1.12); } }
 .confetti-canvas { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
-.game-head { position: relative; z-index: 2; display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 8px; }
-.game-title { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 16px; letter-spacing: -.01em; color: var(--text); }
-.game-logo { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px;
-  background: linear-gradient(135deg, #5B8BFF, #8B6FFF); box-shadow: 0 6px 18px rgba(94, 116, 255, .4); }
-.game-x { color: var(--muted); }
-.game-x:hover { color: var(--text); }
-.game-body { position: relative; z-index: 2; overflow-y: auto; padding: 8px 18px 20px; display: flex; flex-direction: column; gap: 13px; }
 
 .g-hero { display: flex; align-items: center; gap: 16px; padding: 16px; border-radius: 16px;
   background: var(--bg-soft); border: 1px solid var(--border); }
@@ -2319,8 +2284,6 @@ body.beginner .beginner-banner.dismissed { display: none; }
 
 /* ---------- Reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
-  .g-coin, .g-bar-fill, .game-aurora, .lb-row, .token-chip.bump,
-  .g-daily.ready .g-claim, .g-streak .g-card-h .g-flame,
   .order-dialog.ai-controlled,
   .coach-art svg, .coach-art.pop, .coach-step.pop, .beginner-banner { animation: none !important; }
 }

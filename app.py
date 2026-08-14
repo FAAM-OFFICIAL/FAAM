@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
+import errno
 import hashlib
 import hmac
 import io
@@ -102,7 +103,6 @@ CHANGELOG = [
     ]},
     {"version": "1.2", "date": "2026-06-15", "title": "Learn & play", "items": [
         {"tag": "new", "text": "Beginner mode — a guided tour and plain-language tips."},
-        {"tag": "new", "text": "Game of Stocks — tokens, streaks, daily rewards and a leaderboard."},
         {"tag": "new", "text": "Windows & Linux downloads, plus a browser version."},
     ]},
     {"version": "1.1", "date": "2026-06-12", "title": "Sharper forecasts", "items": [
@@ -289,33 +289,69 @@ def _save_json(path: Path, data) -> bool:
         return False
 
 
-def load_watchlist() -> list:
-    wl = _load_json(WATCHLIST_FILE, None)
+# ---------- Per-user stores ---------------------------------------------------
+# These files were written when FAAM was a single-user app on one Mac, so they
+# held ONE watchlist and ONE portfolio for everybody. On a hosted, multi-user
+# backend that meant any signed-in user was served another user's holdings.
+# Everything below is now keyed by username; _user_bucket does the migration.
+_USER_STORE_LOCK = threading.RLock()
+_LEGACY_KEY = "__legacy__"
+
+
+def _user_bucket(path: Path, username: str, default):
+    """Read one user's slice of a per-user file, migrating a legacy flat file
+    into the first account that asks for it (that's the machine's owner)."""
+    with _USER_STORE_LOCK:
+        raw = _load_json(path, None)
+        if isinstance(raw, dict) and raw.get("__perUser__"):
+            return raw.get("users", {}).get(username, default)
+        if raw is None:
+            return default
+        # A pre-migration file: a bare list/dict shared by everyone.
+        holder = username or _LEGACY_KEY
+        _save_json(path, {"__perUser__": True, "users": {holder: raw}})
+        return raw if holder == username else default
+
+
+def _user_bucket_save(path: Path, username: str, value) -> bool:
+    with _USER_STORE_LOCK:
+        raw = _load_json(path, None)
+        if isinstance(raw, dict) and raw.get("__perUser__"):
+            data = raw
+        else:
+            data = {"__perUser__": True,
+                    "users": ({_LEGACY_KEY: raw} if raw is not None else {})}
+        data.setdefault("users", {})[username or _LEGACY_KEY] = value
+        return _save_json(path, data)
+
+
+def load_watchlist(username: str = "") -> list:
+    wl = _user_bucket(WATCHLIST_FILE, username or _req_username(), None)
     if not isinstance(wl, list) or not wl:
         return list(DEFAULT_TICKERS)
     return [str(s).upper() for s in wl]
 
 
-def save_watchlist(symbols: list) -> bool:
-    return _save_json(WATCHLIST_FILE, symbols)
+def save_watchlist(symbols: list, username: str = "") -> bool:
+    return _user_bucket_save(WATCHLIST_FILE, username or _req_username(), symbols)
 
 
-def load_portfolio() -> list:
-    pf = _load_json(PORTFOLIO_FILE, [])
+def load_portfolio(username: str = "") -> list:
+    pf = _user_bucket(PORTFOLIO_FILE, username or _req_username(), [])
     return pf if isinstance(pf, list) else []
 
 
-def save_portfolio(positions: list) -> bool:
-    return _save_json(PORTFOLIO_FILE, positions)
+def save_portfolio(positions: list, username: str = "") -> bool:
+    return _user_bucket_save(PORTFOLIO_FILE, username or _req_username(), positions)
 
 
-def load_broker() -> dict:
-    b = _load_json(BROKER_FILE, {})
+def load_broker(username: str = "") -> dict:
+    b = _user_bucket(BROKER_FILE, username or _req_username(), {})
     return b if isinstance(b, dict) else {}
 
 
-def save_broker(pref: dict) -> bool:
-    return _save_json(BROKER_FILE, pref)
+def save_broker(pref: dict, username: str = "") -> bool:
+    return _user_bucket_save(BROKER_FILE, username or _req_username(), pref)
 
 
 def massive_key() -> str:
@@ -3374,118 +3410,6 @@ def openai_tts(text: str, voice: str = TTS_VOICE):
         return None, {"error": f"network error: {e.reason}"}
 
 
-# ---------- Game of Stocks (gamification: tokens, streaks, daily rewards) ----------
-# A light, opt-in engagement layer. Per-user game state lives inside the user
-# record (users.json -> user["game"]); no new store, no extra deps.
-GAME_DAILY_BASE = 50
-
-# Ambient competitors so the leaderboard always feels alive even with few real
-# players. Stable, playful house bots — clearly not real accounts.
-_GAME_NPCS = [
-    {"name": "DiamondHands",  "tokens": 4200, "streak": 14},
-    {"name": "BullRunBella",  "tokens": 3650, "streak": 9},
-    {"name": "TrendSurfer",   "tokens": 2975, "streak": 21},
-    {"name": "VolatilityVic", "tokens": 2110, "streak": 5},
-    {"name": "SteadyEddie",   "tokens": 1485, "streak": 33},
-    {"name": "MoonMike",      "tokens": 990,  "streak": 3},
-    {"name": "PaperTrader7",  "tokens": 545,  "streak": 2},
-]
-
-
-def _today_utc() -> str:
-    # datetime.utcnow() is deprecated and slated for removal; gmtime is exact.
-    return time.strftime("%Y-%m-%d", time.gmtime())
-
-
-def _yesterday_utc() -> str:
-    return time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
-
-
-def _game_default() -> dict:
-    return {"tokens": 0, "streak": 0, "best_streak": 0, "last_claim": "", "claims": 0}
-
-
-def _game_of(rec) -> dict:
-    g = _game_default()
-    if isinstance(rec, dict) and isinstance(rec.get("game"), dict):
-        g.update(rec["game"])
-    return g
-
-
-def _game_level(tokens: int) -> dict:
-    """Levels cost 200, 300, 400, ... tokens (cumulative). Returns progress."""
-    lvl, floor, need = 1, 0, 200
-    while tokens >= floor + need:
-        floor += need
-        lvl += 1
-        need += 100
-    return {"level": lvl, "into": tokens - floor, "span": need,
-            "floor": floor, "next": floor + need}
-
-
-def _daily_reward(streak: int) -> int:
-    """Reward for a claim landing on `streak` (post-increment). 50 + 15/day, capped."""
-    return GAME_DAILY_BASE + min(max(streak - 1, 0), 9) * 15
-
-
-def _game_leaderboard(current_username: str) -> list:
-    rows = [{"name": n["name"], "tokens": n["tokens"], "streak": n["streak"], "npc": True}
-            for n in _GAME_NPCS]
-    seen_you = False
-    for uname, rec in load_users().items():
-        g = rec.get("game") if isinstance(rec, dict) else None
-        if isinstance(g, dict) and (g.get("claims") or g.get("tokens")):
-            you = (uname == current_username)
-            seen_you = seen_you or you
-            rows.append({"name": uname, "tokens": int(g.get("tokens") or 0),
-                         "streak": int(g.get("streak") or 0), "npc": False, "you": you})
-    if current_username and not seen_you:
-        cu = _game_of(load_users().get(current_username, {}))
-        rows.append({"name": current_username, "tokens": int(cu["tokens"]),
-                     "streak": int(cu["streak"]), "npc": False, "you": True})
-    rows.sort(key=lambda r: (-r["tokens"], r["name"].lower()))
-    for i, r in enumerate(rows):
-        r["rank"] = i + 1
-    return rows
-
-
-def _game_state_for(username: str) -> dict:
-    g = _game_of(load_users().get(username, {}))
-    today = _today_utc()
-    next_streak = g["streak"] + 1 if g.get("last_claim") == _yesterday_utc() else 1
-    board = _game_leaderboard(username)
-    rank = next((r["rank"] for r in board if r.get("you")), len(board))
-    return {
-        "tokens": int(g["tokens"]), "streak": int(g["streak"]),
-        "best_streak": int(g["best_streak"]), "claims": int(g["claims"]),
-        "last_claim": g["last_claim"], "claimable": g.get("last_claim") != today,
-        "reward_preview": _daily_reward(next_streak),
-        "level": _game_level(int(g["tokens"])), "rank": rank, "players": len(board),
-    }
-
-
-def _game_claim(username: str) -> dict:
-    users = load_users()
-    rec = users.get(username)
-    if not rec:
-        return {"error": "Not logged in."}
-    g = _game_of(rec)
-    if g.get("last_claim") == _today_utc():
-        return {"error": "Already claimed today.", "already": True}
-    new_streak = g["streak"] + 1 if g.get("last_claim") == _yesterday_utc() else 1
-    reward = _daily_reward(new_streak)
-    g["tokens"] = int(g["tokens"]) + reward
-    g["streak"] = new_streak
-    g["best_streak"] = max(int(g["best_streak"]), new_streak)
-    g["last_claim"] = _today_utc()
-    g["claims"] = int(g["claims"]) + 1
-    rec["game"] = g
-    users[username] = rec
-    save_users(users)
-    state = _game_state_for(username)
-    return {"ok": True, "reward": reward, "streak": new_streak, **state}
-
-
 # ---------- Windows package (download) ----------
 # This launcher fixes the three things that used to make Windows "not work":
 #   1. The Microsoft Store python stub: `where python` finds a fake shim that
@@ -4514,14 +4438,6 @@ NOT FINANCIAL ADVICE.
                 "provider": user.get("provider", "local"),
             })
 
-        if path == "/api/game":
-            if not user:
-                return self._json({"auth": False})
-            return self._json({"auth": True, **_game_state_for(user["username"])})
-
-        if path == "/api/game/leaderboard":
-            return self._json({"leaderboard": _game_leaderboard(user["username"] if user else "")})
-
         if path == "/auth/google/start":
             cid, _ = google_creds()
             if not cid:
@@ -4616,6 +4532,9 @@ NOT FINANCIAL ADVICE.
             return self._json({"text": load_adviser()})
 
         if path == "/api/broker":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in first."}, 401)
             return self._json(load_broker())
 
         if path == "/api/pro":
@@ -4976,13 +4895,6 @@ NOT FINANCIAL ADVICE.
         if path == "/api/logout":
             return self._json({"ok": True}, set_cookie=self._session_cookie(clear=True))
 
-        if path == "/api/game/claim":
-            u = self._current_user()
-            if not u:
-                return self._json({"error": "Log in to play the Game of Stocks."}, 401)
-            res = _game_claim(u["username"])
-            return self._json(res, 200 if res.get("ok") else 400)
-
         if path == "/api/paper/trade":
             u = self._current_user()
             if not u:
@@ -5043,12 +4955,21 @@ NOT FINANCIAL ADVICE.
             return
 
         if path == "/api/broker":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in first."}, 401)
             body = self._read_json()
             broker = (body.get("broker") or "").strip()
             save_broker({"broker": broker})
             return self._json({"ok": True, "broker": broker})
 
         if path == "/api/stripe/key":
+            # This writes the server's payment secret. It had no auth check at
+            # all, so any request could replace the Stripe key on a hosted
+            # deployment. Admin only, and never echo the key back.
+            u = self._current_user()
+            if not (u and is_admin_username(u.get("username", ""))):
+                return self._json({"error": "Not found."}, 404)
             body = self._read_json()
             key = (body.get("key") or "").strip()
             if not key.startswith("sk_"):
@@ -5267,6 +5188,9 @@ NOT FINANCIAL ADVICE.
             return self._json({"text": text, "source": "ai"})
 
         if path == "/api/watchlist/add":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in first."}, 401)
             body = self._read_json()
             sym = (body.get("symbol") or "").strip().upper()
             if not sym:
@@ -5284,6 +5208,9 @@ NOT FINANCIAL ADVICE.
             return self._json({"ok": True, "watchlist": wl, "name": q.get("name", sym)})
 
         if path == "/api/watchlist/remove":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in first."}, 401)
             body = self._read_json()
             sym = (body.get("symbol") or "").strip().upper()
             wl = [s for s in load_watchlist() if s.upper() != sym]
@@ -5291,6 +5218,9 @@ NOT FINANCIAL ADVICE.
             return self._json({"ok": True, "watchlist": wl})
 
         if path == "/api/portfolio/add":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in first."}, 401)
             body = self._read_json()
             sym = (body.get("symbol") or "").strip().upper()
             if not sym:
@@ -5334,6 +5264,9 @@ NOT FINANCIAL ADVICE.
             return self._json({"ok": True, "shares": shares, "cost": cost, "price": price})
 
         if path == "/api/portfolio/remove":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in first."}, 401)
             body = self._read_json()
             pid = (body.get("id") or "").strip()
             pf = [p for p in load_portfolio() if p.get("id") != pid]
@@ -5533,6 +5466,30 @@ NOT FINANCIAL ADVICE.
             sys.stderr.write(f"[{datetime.now():%H:%M:%S}] {msg}\n")
 
 
+PORT_SCAN = 20      # how many ports past PORT to try if ours is taken
+
+
+def serve_on_free_port():
+    """Bind PORT, or the next free port after it.
+
+    Another program can already own 8765 — any local dev server will do. FAAM
+    used to die with 'Address already in use', and the desktop window then
+    happily loaded http://localhost:8765 anyway, showing whoever *was* there
+    (usually their 404 page). Taking the next free port keeps both alive."""
+    for offset in range(PORT_SCAN + 1):
+        port = PORT + offset
+        try:
+            httpd = ThreadingHTTPServer((BIND_HOST, port), Handler)
+        except OSError as e:
+            if e.errno not in (errno.EADDRINUSE, errno.EACCES):
+                raise
+            if offset == 0:
+                print(f"   ⚠ Port {PORT} is taken by another program — trying {PORT + 1}…")
+            continue
+        return httpd, port
+    return None, 0
+
+
 def main() -> None:
     banner = r"""
    ███████╗ █████╗  █████╗ ███╗   ███╗
@@ -5551,14 +5508,24 @@ def main() -> None:
     seed_users()
     gid, _ = google_creds()
     print(f"   ✓ Accounts on · dev admin seeded (Elite) · Google sign-in: {'on' if gid else 'not configured'}")
-    print(f"   → http://localhost:{PORT}\n")
 
     if BIND_HOST in ("127.0.0.1", "localhost"):
         print("   ✓ Listening on this computer only (set FAAM_HOST=0.0.0.0 to expose it)")
     else:
         print(f"   ⚠ Listening on {BIND_HOST} — reachable from your network.")
 
-    with ThreadingHTTPServer((BIND_HOST, PORT), Handler) as httpd:
+    httpd, port = serve_on_free_port()
+    if httpd is None:
+        print(f"   ✗ Ports {PORT}-{PORT + PORT_SCAN} are all busy. Close something and retry.")
+        sys.exit(1)
+    # The window reads this to find us, so it can never load a stranger's page.
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        (DATA_DIR / "port").write_text(str(port))
+    except Exception:  # noqa: BLE001
+        pass
+    print(f"   → http://localhost:{port}\n")
+    with httpd:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

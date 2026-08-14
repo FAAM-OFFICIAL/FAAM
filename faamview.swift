@@ -54,6 +54,8 @@ func killOldServer() {
 }
 
 func launchServer(key: String) -> Process {
+    // Drop any port left by a previous run so we can't chase a stale one.
+    try? FileManager.default.removeItem(atPath: faamDir + "/port")
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
     p.arguments = ["python3", resourcesDir + "/app.py"]
@@ -182,20 +184,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKUI
         NSApp.mainMenu = main
     }
 
+    // The server writes the port it actually bound to; if 8765 was taken by
+    // another program it will be on a different one. Falling back to `port`
+    // is what used to make the window load a stranger's server.
+    func servedPort() -> Int {
+        if let s = try? String(contentsOfFile: faamDir + "/port", encoding: .utf8),
+           let p = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)), p > 0 {
+            return p
+        }
+        return port
+    }
+
     func poll(_ attempt: Int) {
-        let dash = URL(string: "http://localhost:\(port)/login")!
-        if attempt > 50 { webView?.load(URLRequest(url: dash)); return }
-        var req = URLRequest(url: URL(string: "http://localhost:\(port)/api/health")!)
+        let p = servedPort()
+        // Never load the page until FAAM itself has answered. Previously this
+        // gave up after 50 tries and loaded the URL regardless, which is how a
+        // bare "Error response 404" from someone else's server ended up on
+        // screen instead of FAAM.
+        if attempt > 60 { showServerError(); return }
+        var req = URLRequest(url: URL(string: "http://localhost:\(p)/api/health")!)
         req.timeoutInterval = 1
-        URLSession.shared.dataTask(with: req) { [weak self] _, resp, _ in
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
+            let ok = (resp as? HTTPURLResponse)?.statusCode == 200
+                && (String(data: data ?? Data(), encoding: .utf8) ?? "").contains("\"ok\"")
             DispatchQueue.main.async {
-                if (resp as? HTTPURLResponse)?.statusCode == 200 {
-                    self?.webView?.load(URLRequest(url: dash))
+                guard let self = self else { return }
+                if ok, let u = URL(string: "http://localhost:\(p)/login") {
+                    self.webView?.load(URLRequest(url: u))
                 } else {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.poll(attempt + 1) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.poll(attempt + 1) }
                 }
             }
         }.resume()
+    }
+
+    // Shown when the bundled server never came up, instead of whatever page
+    // happens to be answering on that port.
+    func showServerError() {
+        let html = """
+        <html><head><meta name='viewport' content='width=device-width,initial-scale=1'>
+        <style>body{font-family:-apple-system,system-ui;background:#0B1220;color:#E7ECF3;
+        display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}
+        .b{max-width:420px;padding:24px}h1{font-size:20px;margin:0 0 8px}p{color:#8A97AD;line-height:1.55;font-size:14px}
+        code{background:#182238;padding:2px 6px;border-radius:5px;font-size:12.5px}
+        button{margin-top:18px;padding:10px 20px;border:0;border-radius:10px;background:#2E64F0;color:#fff;font-weight:700;cursor:pointer}</style>
+        </head><body><div class='b'><h1>FAAM couldn’t start its server</h1>
+        <p>This usually means Python isn’t available, or every port from 8765 upward is busy.
+        Check <code>~/.faam/run.log</code> for the reason.</p>
+        <button onclick='location.reload()'>Try again</button></div></body></html>
+        """
+        webView?.loadHTMLString(html, baseURL: nil)
     }
 
     // Open target="_blank" / window.open links (e.g. news headlines, broker pages)
