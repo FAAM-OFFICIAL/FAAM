@@ -70,6 +70,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   margin-left: 5px; vertical-align: middle; position: relative; top: -2px;
 }
 .beta-banner {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
   margin: 18px auto 0; max-width: 560px; font-size: 13.5px; color: var(--text-2);
   background: var(--accent-soft, #EEF4FF); border: 1px solid rgba(46,100,240,.22);
   border-radius: 12px; padding: 10px 16px;
@@ -589,3 +590,7 @@ section { scroll-margin-top: 84px; }
 @media (max-width: 820px) {
   .learn-card { grid-template-columns: 1fr; padding: 28px; gap: 26px; }
 }
+
+.beta-banner svg { flex: none; color: var(--blue); }
+/* The lesson-row marker now holds an icon rather than a glyph. */
+.learn-lesson--live .ll-n { display: grid; place-items: center; }

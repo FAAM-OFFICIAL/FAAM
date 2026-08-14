@@ -282,7 +282,7 @@
             <span class="ai-badge">AI</span>
             <h3>Agent Insights</h3>
           </div>
-          <button class="ghostbtn" id="refreshAI" title="Re-run agent">↻ Refresh</button>
+          <button class="ghostbtn" id="refreshAI" title="Re-run agent"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>Refresh</button>
         </header>
         <div class="ai-body" id="aiBody">
           <p class="muted small">Select a stock to get an AI take.</p>
@@ -506,40 +506,262 @@
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3 1 9l11 6 9-4.9V17h2V9L12 3zM5 13.2V17l7 3.8 7-3.8v-3.8l-7 3.8-7-3.8z"/></svg>
         </span>
         <span class="learn-fs-name">FAAM Learn</span>
-        <span class="learn-fs-chip">IN DEVELOPMENT</span>
+        <span class="learn-fs-titan" id="learnTitanBadge">Powered by TITAN</span>
       </div>
-      <button class="iconbtn" id="closeLearn" aria-label="Close FAAM Learn">
-        <svg viewBox="0 0 24 24" width="18" height="18"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      <!-- Daily learning streak -->
+      <div class="learn-streak" id="learnStreak" hidden title="Days in a row you've learned something">
+        <svg class="lst-flame" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M13.4 2.2c.3 2.5-.6 4.3-2.1 5.9-1.4 1.5-3.2 2.9-3.9 5.2-1 3.3.9 6.6 4.1 7.6 3.4 1.1 7-.8 8-4.2.9-2.9-.3-5.5-1.7-7.2-.2 1-.8 1.8-1.6 2.2.5-3.6-1.2-7-2.8-9.5zm-2 12.1c.9-.9 1.4-1.9 1.5-3.1.9.9 1.6 2.1 1.2 3.6-.3 1.2-1.6 2-2.8 1.6-1.1-.3-1.7-1.5-1.4-2.7.1-.5.4-.9.8-1.3z"/></svg><b id="lstDays">0</b>
+      </div>
+      <!-- Points & rank: filled from /api/learn/progress, hidden until signed in -->
+      <div class="learn-xp" id="learnXp" hidden>
+        <div class="lxp-text">
+          <span class="lxp-pts" id="lxpPts">0 pts</span>
+          <span class="lxp-rank" id="lxpRank">Rookie</span>
+        </div>
+        <div class="lxp-bar" title="Progress to your next rank"><i id="lxpFill"></i></div>
+        <span class="lxp-next" id="lxpNext"></span>
+      </div>
+      <button class="learn-fs-x" id="closeLearn" aria-label="Exit FAAM Learn" title="Exit">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
     <div class="learn-fs-body">
-      <div class="learn-fs-hero">
-        <span class="learn-fs-badge">Currently being built</span>
-        <h1>FAAM Learn is on the way.</h1>
-        <p>A full learning hub — lessons, guided practice, and a tutor that answers in plain English. We're building it now.</p>
-        <div class="learn-fs-cards">
-          <div class="learn-fs-card">
-            <span class="lf-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 1.5z"/><path d="M9 8h7M9 12h7"/></svg></span>
-            <h3>Structured lessons</h3>
-            <p>From “what is a stock?” to reading a chart, in short steps.</p>
+
+      <!-- ONBOARDING — Titan types its questions out, one at a time -->
+      <section class="learn-view learn-center" id="lvIntro" hidden>
+        <div class="ob">
+          <div class="ob-top">
+            <div class="ob-dots" id="obDots" aria-hidden="true"></div>
+            <button type="button" class="ob-skip" id="obSkip">Skip</button>
           </div>
-          <div class="learn-fs-card">
-            <span class="lf-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 7-7"/><path d="M14 8h7v7"/></svg></span>
-            <h3>Practice that counts for nothing</h3>
-            <p>Apply each lesson in the simulator with virtual money.</p>
+
+          <div class="ob-stage">
+            <div class="ob-bot" aria-hidden="true">
+              <span class="ob-face">
+                <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="5" width="18" height="13" rx="2.5"/><path d="M8 21h8M12 18v3"/>
+                  <circle class="ob-eye" cx="9.2" cy="11" r="1.25" fill="currentColor" stroke="none"/>
+                  <circle class="ob-eye" cx="14.8" cy="11" r="1.25" fill="currentColor" stroke="none"/>
+                </svg>
+              </span>
+              <span class="ob-wave" id="obWave"><i></i><i></i><i></i></span>
+            </div>
+
+            <div class="ob-bubble" id="obBubble">
+              <p class="ob-q" id="obQ"></p>
+              <span class="ob-caret" id="obCaret" aria-hidden="true"></span>
+            </div>
           </div>
-          <div class="learn-fs-card">
-            <span class="lf-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4v.3"/><path d="M12 17h.01"/></svg></span>
-            <h3>Ask anything</h3>
-            <p>A tutor for the jargon, whenever something doesn't click.</p>
+
+          <div class="ob-answers" id="obAnswers" aria-live="polite"></div>
+
+          <div class="ob-done" id="obDone" hidden>
+            <div class="ob-done-ic" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+            <h2 id="obDoneH">All set.</h2>
+            <p class="muted" id="obDoneP"></p>
+            <button type="button" class="btn-go" id="obGo">Open my library →</button>
           </div>
         </div>
-        <div class="learn-fs-actions">
-          <button type="button" class="btn-go" id="learnFsCourse">Take the course that's ready now →</button>
-          <button type="button" class="btn-ghost" id="learnFsPractice">Open practice trading</button>
+      </section>
+
+      <!-- LIBRARY (home) -->
+      <section class="learn-view learn-wide" id="lvHome">
+        <div class="lib">
+          <!-- Category rail -->
+          <aside class="lib-side">
+            <p class="lib-side-h">Browse</p>
+            <nav class="lib-cats" id="libCats"></nav>
+            <div class="lib-stats" id="libStats">
+              <div class="lib-stat"><b id="libStatCourses">0</b><span>courses done</span></div>
+              <div class="lib-stat"><b id="libStatLessons">0</b><span>lessons read</span></div>
+              <div class="lib-stat"><b id="libStatCerts">0</b><span>certificates</span></div>
+            </div>
+            <div class="lib-soon">
+              <span class="lib-soon-tag">Coming soon</span>
+              <p>Video courses and trading simulations are on the way.</p>
+            </div>
+          </aside>
+
+          <!-- Catalog -->
+          <div class="lib-main">
+            <header class="lib-head">
+              <div>
+                <h1 id="libTitle">All courses</h1>
+                <p class="muted" id="libSub">Short lessons on stocks, risk, strategy, crypto and forex. Two to four minutes each.</p>
+              </div>
+              <div class="lib-search">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+                <input type="search" id="libSearch" placeholder="Search courses" aria-label="Search courses">
+              </div>
+            </header>
+
+            <!-- Placement-test banner: only until you've taken it -->
+            <div class="lib-place" id="libPlace" hidden>
+              <div class="lib-place-ic" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>
+              </div>
+              <div class="lib-place-txt">
+                <h3 id="libPlaceH">Not sure where to start?</h3>
+                <p id="libPlaceP">Take the 15-question placement test. Titan grades it and writes a course around exactly what you missed.</p>
+              </div>
+              <button type="button" class="btn-go" id="learnStartDiag">Start placement test →</button>
+            </div>
+
+            <div class="lib-grid" id="libGrid"></div>
+            <p class="lib-empty muted" id="libEmpty" hidden>No courses match that search.</p>
+          </div>
         </div>
-        <p class="learn-fs-note muted small">The stock course and practice simulator are already live — FAAM Learn will bring them together in one place.</p>
-      </div>
+      </section>
+
+      <!-- COURSE DETAIL -->
+      <section class="learn-view learn-wide" id="lvCourse" hidden>
+        <div class="course-page">
+          <button type="button" class="lib-back" id="lcBack">← All courses</button>
+          <div class="course-hero">
+            <div class="course-hero-txt">
+              <p class="course-eyebrow"><span id="lcCat">Stocks</span> · <span id="lcLevel">Beginner</span> · <span id="lcMins">10 min</span></p>
+              <h1 id="lcTitle">…</h1>
+              <p class="muted" id="lcBlurb"></p>
+              <div class="course-prog">
+                <div class="learn-prog"><div class="learn-prog-fill" id="lcFill"></div></div>
+                <span class="small muted" id="lcProgText">0 of 0 lessons</span>
+              </div>
+              <div class="learn-fs-actions course-actions">
+                <button type="button" class="btn-go" id="lcStart">Start reading →</button>
+                <span class="course-cert" id="lcCert" hidden><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="9" r="6"/><path d="M9.5 14.3L8 22l4-2.2L16 22l-1.5-7.7"/></svg>Certificate earned</span>
+              </div>
+            </div>
+            <div class="course-ring" id="lcRing" aria-hidden="true"></div>
+          </div>
+
+          <!-- The interactive article: sections render inline, each with its
+               own section test. Sections mark themselves read as you reach them. -->
+          <div class="article" id="lcArticle"></div>
+
+          <!-- End-of-unit review, unlocked once the whole article is read -->
+          <section class="review" id="lcReviewBlock">
+            <div class="review-locked" id="rvLocked">
+              <span class="rv-lock" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+              </span>
+              <div>
+                <h3>Review locked</h3>
+                <p class="muted small" id="rvLockedP">Read every section above to unlock the 5-question review.</p>
+              </div>
+            </div>
+
+            <div class="review-intro" id="rvIntro" hidden>
+              <div class="rv-head">
+                <span class="rv-eyebrow">Unit test</span>
+                <h3 id="rvIntroH">Ready for the review?</h3>
+                <p class="muted" id="rvIntroP">5 questions on everything above. Get 4 right to pass and earn your certificate.</p>
+              </div>
+              <button type="button" class="btn-go" id="rvStart">Start the review →</button>
+            </div>
+
+            <div class="review-quiz" id="rvQuiz" hidden>
+              <div class="rv-bar"><span id="rvCount">Question 1 of 5</span><span class="rv-pts" id="rvPts">15 pts each</span></div>
+              <div class="learn-prog"><div class="learn-prog-fill" id="rvFill"></div></div>
+              <h3 class="rv-q" id="rvQ"></h3>
+              <div class="learn-opts" id="rvOpts"></div>
+              <div class="learn-qnav">
+                <button type="button" class="btn-ghost" id="rvBack">← Back</button>
+                <button type="button" class="btn-go" id="rvNext" disabled>Next →</button>
+              </div>
+            </div>
+
+            <div class="review-result" id="rvResult" hidden>
+              <div class="rv-score-head">
+                <span class="rv-score" id="rvScore">—</span>
+                <div>
+                  <h3 id="rvVerdict">—</h3>
+                  <p class="muted" id="rvVerdictP"></p>
+                </div>
+              </div>
+              <div class="rv-answers" id="rvAnswers"></div>
+              <div class="learn-fs-actions">
+                <button type="button" class="btn-go" id="rvRetake">Retake the review</button>
+                <button type="button" class="btn-ghost" id="rvBackCourses">← All courses</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- QUIZ -->
+      <section class="learn-view" id="lvQuiz" hidden>
+        <div class="learn-quiz">
+          <div class="learn-prog"><div class="learn-prog-fill" id="lqFill"></div></div>
+          <p class="learn-qmeta"><span id="lqCount">Question 1 of 15</span> · <span id="lqTopic">Ownership</span> · <span class="lq-pts" id="lqPts">10 pts</span></p>
+          <h2 class="learn-qtext" id="lqText">…</h2>
+          <div class="learn-opts" id="lqOpts"></div>
+          <div class="learn-qnav">
+            <button type="button" class="btn-ghost" id="lqBack">← Back</button>
+            <button type="button" class="btn-go" id="lqNext" disabled>Next →</button>
+          </div>
+          <p class="learn-fs-note muted small">Titan checks your answers when you finish — nothing is graded in the browser.</p>
+        </div>
+      </section>
+
+      <!-- GRADING -->
+      <section class="learn-view learn-center" id="lvGrading" hidden>
+        <div class="learn-grading">
+          <span class="learn-spin" aria-hidden="true"></span>
+          <h2>Titan is reviewing your answers…</h2>
+          <p class="muted small">Scoring each topic and building a course around what you missed.</p>
+        </div>
+      </section>
+
+      <!-- RESULTS -->
+      <section class="learn-view" id="lvResults" hidden>
+        <div class="learn-results">
+          <div class="learn-res-head">
+            <span class="learn-res-score" id="lrScore">—</span>
+            <div>
+              <h2 id="lrLevel">—</h2>
+              <p id="lrSummary" class="muted"></p>
+              <p class="learn-res-earned" id="lrEarned" hidden></p>
+            </div>
+          </div>
+          <div class="learn-sw">
+            <div class="learn-sw-card learn-sw-good">
+              <h3><span class="sw-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span> Strengths</h3>
+              <ul id="lrStrengths"></ul>
+            </div>
+            <div class="learn-sw-card learn-sw-bad">
+              <h3><span class="sw-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg></span> Weaknesses</h3>
+              <ul id="lrWeaknesses"></ul>
+            </div>
+          </div>
+          <div class="learn-course-block">
+            <div class="learn-course-head">
+              <h3>Your course</h3>
+              <span class="muted small" id="lrCourseMeta">Generated by Titan</span>
+            </div>
+            <ol class="learn-course-list" id="lrCourse"></ol>
+          </div>
+          <div class="learn-fs-actions">
+            <button type="button" class="btn-go" id="lrStart">Start lesson 1 →</button>
+            <button type="button" class="btn-ghost" id="lrLibrary">Browse all courses</button>
+            <button type="button" class="btn-ghost" id="lrReview">See what I missed</button>
+            <button type="button" class="btn-ghost" id="lrRetake">Retake test</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- MISSED-ANSWER REVIEW -->
+      <section class="learn-view" id="lvReview" hidden>
+        <div class="learn-results">
+          <h2 class="learn-rev-title">What you missed</h2>
+          <div id="lrReviewList" class="learn-rev-list"></div>
+          <div class="learn-fs-actions">
+            <button type="button" class="btn-go" id="lrBackToResults">← Back to results</button>
+          </div>
+        </div>
+      </section>
+
     </div>
   </dialog>
 
@@ -745,49 +967,92 @@
   </dialog>
 
   <!-- Practice trading — simulated account, virtual money -->
-  <dialog id="paperDialog" class="form-dialog paper-dialog">
-    <header>
-      <div class="ai-title"><span class="ai-badge paper-badge">PRACTICE</span><h3>Practice trading</h3></div>
-      <button class="iconbtn" id="closePaper" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg></button>
-    </header>
-    <div class="form-body">
-      <p class="paper-lead muted small">Virtual money, real delayed prices. Nothing here is a real order — no broker, no risk. Practice the process before it counts.</p>
-
-      <div class="paper-stats" id="paperStats">
-        <div class="paper-stat"><span>Total value</span><strong id="paperEquity">—</strong></div>
-        <div class="paper-stat"><span>Cash</span><strong id="paperCash">—</strong></div>
-        <div class="paper-stat"><span>Invested</span><strong id="paperInvested">—</strong></div>
-        <div class="paper-stat"><span>Total profit / loss</span><strong id="paperPl">—</strong></div>
+  <dialog id="paperDialog" class="paper-fs">
+    <div class="pf-bar">
+      <div class="pf-brand">
+        <span class="pf-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 7-7"/><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M14 8h7v7"/></svg>
+        </span>
+        <span class="pf-name">Practice Trading</span>
+        <span class="pf-chip">VIRTUAL MONEY</span>
+        <span class="pf-live" id="pfLive"><i></i> LIVE</span>
       </div>
+      <button class="learn-fs-x" id="closePaper" aria-label="Exit practice trading" title="Exit">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
 
-      <div class="paper-ticket">
-        <div class="paper-side" role="group" aria-label="Buy or sell">
-          <button type="button" class="paper-side-btn on" id="paperBuy" aria-pressed="true">Buy</button>
-          <button type="button" class="paper-side-btn" id="paperSell" aria-pressed="false">Sell</button>
+    <div class="pf-body">
+      <!-- LEFT: portfolio -->
+      <div class="pf-main">
+        <div class="pf-hero">
+          <p class="pf-hero-label">Portfolio value</p>
+          <h1 class="pf-value" id="pfEquity">—</h1>
+          <p class="pf-change" id="pfChange">—</p>
         </div>
-        <div class="paper-fields">
-          <label class="paper-field"><span>Symbol</span><input id="paperSymbol" placeholder="AAPL" autocomplete="off" maxlength="12"></label>
-          <label class="paper-field"><span>Shares</span><input id="paperShares" type="number" min="1" step="1" value="1"></label>
+
+        <div class="pf-chart-wrap">
+          <svg class="pf-chart" id="pfChart" viewBox="0 0 600 180" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="pfGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" class="pf-grad-a"/><stop offset="100%" class="pf-grad-b"/>
+              </linearGradient>
+            </defs>
+            <path id="pfArea" class="pf-area" d=""/>
+            <path id="pfLine" class="pf-line" d=""/>
+          </svg>
+          <p class="pf-chart-note muted small" id="pfChartNote">Tracking your portfolio from now — updates every few seconds.</p>
         </div>
-        <p class="paper-est muted small" id="paperEst">Enter a symbol to see an estimate.</p>
-        <button type="button" class="btn-go paper-place" id="paperPlace">Place practice trade</button>
-        <p class="paper-msg" id="paperMsg" role="status" hidden></p>
+
+        <div class="pf-kpis">
+          <div class="pf-kpi"><span>Buying power</span><strong id="pfCash">—</strong></div>
+          <div class="pf-kpi"><span>Invested</span><strong id="pfInvested">—</strong></div>
+          <div class="pf-kpi"><span>Open P/L</span><strong id="pfOpenPl">—</strong></div>
+          <div class="pf-kpi"><span>Realized</span><strong id="pfRealized">—</strong></div>
+        </div>
+
+        <div class="pf-section">
+          <div class="pf-section-head"><h3>Holdings</h3><span class="muted small" id="pfHoldCount"></span></div>
+          <div id="pfPositions" class="pf-holdings"></div>
+        </div>
+
+        <div class="pf-section">
+          <div class="pf-section-head"><h3>History</h3></div>
+          <div id="pfTrades" class="pf-history"></div>
+        </div>
+
+        <p class="pf-disclaimer muted small">Simulated account. Delayed prices; no fees, taxes or slippage modeled. Educational only — not investment advice, and no real order is ever placed.</p>
       </div>
 
-      <div class="paper-section">
-        <div class="setting-label">Your positions</div>
-        <div id="paperPositions" class="paper-positions"></div>
-      </div>
-
-      <div class="paper-section">
-        <div class="setting-label">Recent practice trades</div>
-        <div id="paperTrades" class="paper-trades"></div>
-      </div>
-
-      <div class="paper-foot">
-        <p class="muted small">Simulated results. Delayed prices, no fees or taxes modeled. Educational only — not investment advice.</p>
-        <button type="button" class="btn-ghost paper-reset" id="paperReset">Reset account</button>
-      </div>
+      <!-- RIGHT: order ticket -->
+      <aside class="pf-side">
+        <div class="pf-ticket">
+          <div class="pf-tabs" role="group" aria-label="Buy or sell">
+            <button type="button" class="pf-tab on" id="paperBuy" aria-pressed="true">Buy</button>
+            <button type="button" class="pf-tab" id="paperSell" aria-pressed="false">Sell</button>
+          </div>
+          <label class="pf-field"><span>Symbol</span>
+            <input id="paperSymbol" placeholder="AAPL" autocomplete="off" maxlength="12">
+          </label>
+          <div class="pf-quote" id="pfQuote" hidden>
+            <span class="pf-quote-sym" id="pfQuoteSym">—</span>
+            <span class="pf-quote-px" id="pfQuotePx">—</span>
+          </div>
+          <label class="pf-field"><span>Shares</span>
+            <input id="paperShares" type="number" min="1" step="1" value="1">
+          </label>
+          <div class="pf-quick">
+            <button type="button" data-sh="1">1</button>
+            <button type="button" data-sh="5">5</button>
+            <button type="button" data-sh="10">10</button>
+            <button type="button" id="pfMax">Max</button>
+          </div>
+          <div class="pf-est-row"><span>Estimated total</span><b id="paperEst">—</b></div>
+          <button type="button" class="pf-place" id="paperPlace">Review &amp; place</button>
+          <p class="pf-msg" id="paperMsg" role="status" hidden></p>
+          <button type="button" class="pf-reset" id="paperReset">Reset to $10,000</button>
+        </div>
+      </aside>
     </div>
   </dialog>
 
@@ -829,7 +1094,7 @@
       <p class="muted small" id="ideasIntro">Ideas from your watchlist — long, short, pairs and hedge plays.</p>
       <div class="ideas-list" id="ideasList"></div>
       <div class="ideas-foot">
-        <button type="button" class="ghostbtn" id="ideasRegen">↻ New ideas</button>
+        <button type="button" class="ghostbtn" id="ideasRegen"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>New ideas</button>
         <p class="ideas-disclaimer muted small" id="ideasDisclaimer"></p>
       </div>
     </div>
@@ -931,10 +1196,10 @@
         </div>
         <div class="addon-row" id="paperRow">
           <div class="addon-main">
-            <span class="addon-name">Practice trading</span>
-            <span class="addon-desc muted small">A simulated $10,000 account with real delayed prices. Practice buying and selling with no money at risk.</span>
+            <span class="addon-name">Video courses &amp; simulations</span>
+            <span class="addon-desc muted small">Filmed walkthroughs and a full trading simulation are in the works. FAAM Learn's articles and reviews are live now.</span>
           </div>
-          <button type="button" class="ghostbtn" id="openPaperBtn">Open simulator →</button>
+          <span class="addon-soon">On the way</span>
         </div>
               </div>
       <div class="setting-group">

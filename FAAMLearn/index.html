@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAAM Learn — 14 courses on stocks, crypto &amp; forex</title>
+<meta name="description" content="FAAM Learn is a built-in course library: 14 courses, 65 bite-sized lessons on stocks, risk, strategy, crypto and forex. Earn points, build a streak, collect certificates — free inside FAAM.">
+<meta property="og:title" content="FAAM Learn — learn to invest, one short lesson at a time">
+<meta property="og:description" content="14 courses. 65 lessons. Two to four minutes each. Points, streaks and certificates, plus a placement test that builds a course around what you actually missed.">
+<link rel="icon" href="../favicon.svg">
+<link rel="stylesheet" href="../landing.css">
+<style>
+  /* ---- FAAM Learn page — layered on top of the shared landing styles ---- */
+  .fl-hero { max-width: var(--maxw); margin: 0 auto; padding: 62px 24px 30px; text-align: center; }
+  .fl-hero .kicker { justify-content: center; }
+  .fl-badge {
+    display: inline-block; background: var(--grad); color: #fff; padding: 5px 12px;
+    border-radius: 999px; font-weight: 800; letter-spacing: .08em; font-size: 11px;
+  }
+  .fl-hero h1 { font-size: clamp(32px, 5.2vw, 56px); letter-spacing: -.034em; margin: 16px 0 16px; line-height: 1.03; }
+  .fl-hero .lead { max-width: 660px; margin: 0 auto; color: var(--text-2); font-size: 17px; line-height: 1.6; }
+  .fl-cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 30px; }
+  .fl-note { margin-top: 14px; font-size: 13px; color: var(--muted); }
+
+  /* Numbers strip */
+  .fl-nums {
+    max-width: var(--maxw); margin: 34px auto 0; padding: 0 24px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+  }
+  .fl-num {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 20px 18px; text-align: center; box-shadow: 0 4px 16px -10px rgba(16,24,40,.16);
+  }
+  .fl-num b { display: block; font-size: 30px; font-weight: 850; letter-spacing: -.03em; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .fl-num span { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+
+  /* Section shell */
+  .fl-sec { max-width: var(--maxw); margin: 0 auto; padding: 56px 24px 0; }
+  .fl-sec-head { text-align: center; max-width: 700px; margin: 0 auto 30px; }
+  .fl-sec-head h2 { font-size: clamp(23px, 3.3vw, 33px); letter-spacing: -.028em; }
+  .fl-sec-head p { color: var(--text-2); font-size: 15px; margin-top: 12px; }
+
+  /* Course catalog */
+  .fl-tracks { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+  .fl-track {
+    position: relative; background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r-md); padding: 20px; box-shadow: 0 4px 16px -10px rgba(16,24,40,.16);
+  }
+  .fl-track-h { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .fl-track-ic {
+    flex: none; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+    color: #fff; background: var(--grad);
+  }
+  .fl-track-h h3 { font-size: 16px; letter-spacing: -.015em; }
+  .fl-track-h span { font-size: 11.5px; color: var(--muted); font-weight: 650; }
+  .fl-track ul { display: grid; gap: 7px; }
+  .fl-track li {
+    display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; color: var(--text-2); line-height: 1.45;
+  }
+  .fl-track li::before { content: ""; flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--blue); transform: translateY(-2px); }
+  .fl-lvl {
+    font-size: 9.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--muted); background: var(--panel-2); padding: 2px 7px; border-radius: 999px; margin-left: auto;
+  }
+
+  /* Feature rows */
+  .fl-feats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .fl-feat {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
+    padding: 24px 22px; box-shadow: 0 4px 16px -10px rgba(16,24,40,.16);
+  }
+  .fl-feat-ic {
+    width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
+    color: #fff; background: var(--grad); margin-bottom: 14px;
+  }
+  .fl-feat h3 { font-size: 16.5px; margin-bottom: 8px; letter-spacing: -.018em; }
+  .fl-feat p { font-size: 13.5px; color: var(--text-2); line-height: 1.6; }
+
+  /* Points ladder */
+  .fl-points {
+    display: grid; grid-template-columns: 1.05fr .95fr; gap: 26px; align-items: center;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+    padding: 30px 32px; box-shadow: var(--shadow-card);
+  }
+  .fl-points h2 { font-size: clamp(22px, 3vw, 30px); letter-spacing: -.028em; margin-bottom: 12px; }
+  .fl-points > div > p { color: var(--text-2); font-size: 15px; line-height: 1.6; margin-bottom: 18px; }
+  .fl-ptable { display: grid; gap: 9px; }
+  .fl-prow {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    padding: 11px 15px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg);
+    font-size: 13.5px;
+  }
+  .fl-prow b { font-weight: 800; color: var(--blue); font-variant-numeric: tabular-nums; }
+  .fl-ranks { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; }
+  .fl-rank {
+    font-size: 11px; font-weight: 750; padding: 5px 11px; border-radius: 999px;
+    background: var(--panel-2); color: var(--text-2);
+  }
+  .fl-rank.top { background: var(--grad); color: #fff; }
+
+  /* Placement-test callout */
+  .fl-titan {
+    display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap;
+    background: linear-gradient(135deg, rgba(94,116,255,.09), var(--panel));
+    border: 1px solid rgba(94,116,255,.34); border-radius: var(--r-lg); padding: 30px 32px;
+  }
+  .fl-titan-badge {
+    flex: none; background: var(--grad); color: #fff; font-size: 10.5px; font-weight: 800;
+    letter-spacing: .08em; padding: 6px 12px; border-radius: 999px;
+  }
+  .fl-titan-copy { flex: 1; min-width: 280px; }
+  .fl-titan-copy h2 { font-size: clamp(21px, 2.8vw, 28px); letter-spacing: -.026em; margin-bottom: 10px; }
+  .fl-titan-copy p { color: var(--text-2); font-size: 14.5px; line-height: 1.6; margin-bottom: 14px; }
+  .fl-titan-copy ul { display: grid; gap: 8px; }
+  .fl-titan-copy li { display: flex; gap: 9px; font-size: 13.5px; color: var(--text-2); line-height: 1.5; }
+  .fl-titan-copy li::before { content: "✓"; color: var(--up); font-weight: 800; flex: none; }
+
+  /* Final CTA */
+  .fl-final { max-width: 760px; margin: 0 auto; padding: 62px 24px 76px; text-align: center; }
+  .fl-final h2 { font-size: clamp(25px, 3.6vw, 36px); letter-spacing: -.03em; margin-bottom: 12px; }
+  .fl-final p { color: var(--text-2); font-size: 15.5px; margin-bottom: 24px; }
+  .fl-back { display: inline-block; margin-top: 26px; color: var(--muted); font-size: 13.5px; }
+  .fl-back:hover { color: var(--text); }
+  .fl-legal { margin-top: 26px; font-size: 12px; color: var(--muted); line-height: 1.6; max-width: 620px; margin-inline: auto; }
+
+  @media (max-width: 900px) {
+    .fl-feats { grid-template-columns: 1fr; }
+    .fl-points { grid-template-columns: 1fr; }
+    .fl-nums { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="../">
+        <span class="logo-mark">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <defs><linearGradient id="lgNav" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#4f8cff"/><stop offset="100%" stop-color="#7c5cff"/>
+            </linearGradient></defs>
+            <path fill="url(#lgNav)" d="M3 21V3h2v14l5-7 4 5 7-10v16H3z"/>
+          </svg>
+        </span>
+        <span class="logo">FAAM <span class="brand-beta">BETA</span></span>
+      </a>
+      <nav class="nav-links" aria-label="Sections">
+        <a href="../#models">Models</a>
+        <a href="../#features">Features</a>
+        <a href="./" aria-current="page">FAAM Learn</a>
+        <a href="../#pricing">Pricing</a>
+        <a href="../#faq">FAQ</a>
+      </nav>
+      <div class="nav-actions">
+        <a class="nav-cta" href="../FAAM.zip">Download</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- HERO -->
+    <section class="fl-hero">
+      <p class="kicker"><span class="fl-badge">FAAM LEARN</span></p>
+      <h1>Learn to invest,<br>one short lesson at a time.</h1>
+      <p class="lead">A full course library built into FAAM. Fourteen courses across stocks, risk, strategy, crypto and forex — each lesson two to four minutes, each ending in a question you have to actually answer.</p>
+      <div class="fl-cta">
+        <a href="../FAAM.zip" class="btn btn-primary btn-xl">Get FAAM — it's free in beta</a>
+        <a href="#courses" class="btn btn-ghost">See the courses</a>
+      </div>
+      <p class="fl-note">Included with FAAM. No separate subscription, no card.</p>
+    </section>
+
+    <div class="fl-nums">
+      <div class="fl-num"><b>14</b><span>courses</span></div>
+      <div class="fl-num"><b>65</b><span>lessons</span></div>
+      <div class="fl-num"><b>2–4</b><span>minutes each</span></div>
+      <div class="fl-num"><b>$0</b><span>during beta</span></div>
+    </div>
+
+    <!-- COURSES -->
+    <section class="fl-sec" id="courses">
+      <div class="fl-sec-head">
+        <p class="kicker">The library</p>
+        <h2>Five tracks. Beginner to advanced.</h2>
+        <p>Start anywhere. Every course stands on its own, and every lesson ends with a check question that's graded on FAAM's backend — not in your browser.</p>
+      </div>
+      <div class="fl-tracks">
+
+        <article class="fl-track">
+          <div class="fl-track-h">
+            <span class="fl-track-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 7-7M14 8h7v7"/></svg></span>
+            <div><h3>Stocks</h3><span>5 courses · 23 lessons</span></div>
+          </div>
+          <ul>
+            <li>Stock Market Basics<span class="fl-lvl">Beginner</span></li>
+            <li>Orders &amp; Execution<span class="fl-lvl">Beginner</span></li>
+            <li>Reading Charts &amp; Quotes<span class="fl-lvl">Beginner</span></li>
+            <li>Valuation Basics<span class="fl-lvl">Inter</span></li>
+            <li>Dividends &amp; Total Return<span class="fl-lvl">Inter</span></li>
+          </ul>
+        </article>
+
+        <article class="fl-track">
+          <div class="fl-track-h">
+            <span class="fl-track-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg></span>
+            <div><h3>Risk</h3><span>2 courses · 9 lessons</span></div>
+          </div>
+          <ul>
+            <li>Risk &amp; Position Sizing<span class="fl-lvl">Beginner</span></li>
+            <li>Trading Psychology<span class="fl-lvl">Inter</span></li>
+          </ul>
+          <p style="margin-top:12px;font-size:13px;color:var(--muted);line-height:1.5">The skill that decides whether you're still investing in five years.</p>
+        </article>
+
+        <article class="fl-track">
+          <div class="fl-track-h">
+            <span class="fl-track-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg></span>
+            <div><h3>Strategy</h3><span>3 courses · 15 lessons</span></div>
+          </div>
+          <ul>
+            <li>Long-Term Investing<span class="fl-lvl">Beginner</span></li>
+            <li>Technical Analysis<span class="fl-lvl">Inter</span></li>
+            <li>Day Trading Foundations<span class="fl-lvl">Adv</span></li>
+          </ul>
+        </article>
+
+        <article class="fl-track">
+          <div class="fl-track-h">
+            <span class="fl-track-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M8 7h5a3 3 0 0 1 0 6H8h6a3 3 0 0 1 0 6H8"/></svg></span>
+            <div><h3>Crypto</h3><span>2 courses · 9 lessons</span></div>
+          </div>
+          <ul>
+            <li>Crypto Basics<span class="fl-lvl">Beginner</span></li>
+            <li>Crypto Risks &amp; Security<span class="fl-lvl">Inter</span></li>
+          </ul>
+          <p style="margin-top:12px;font-size:13px;color:var(--muted);line-height:1.5">Including the failure modes — custody, irreversibility and how the scams actually work.</p>
+        </article>
+
+        <article class="fl-track">
+          <div class="fl-track-h">
+            <span class="fl-track-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M12 4v16M7 8l-3 4 3 4M17 8l3 4-3 4"/></svg></span>
+            <div><h3>Forex</h3><span>2 courses · 9 lessons</span></div>
+          </div>
+          <ul>
+            <li>Forex Fundamentals<span class="fl-lvl">Beginner</span></li>
+            <li>Pairs, Sessions &amp; Spreads<span class="fl-lvl">Inter</span></li>
+          </ul>
+        </article>
+
+        <article class="fl-track" style="background:linear-gradient(150deg, rgba(94,116,255,.10), var(--panel));border-color:rgba(94,116,255,.34)">
+          <div class="fl-track-h">
+            <span class="fl-track-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.2 4.9 5.3.6-4 3.6 1.1 5.2L12 14.7 7.4 17.3l1.1-5.2-4-3.6 5.3-.6z"/></svg></span>
+            <div><h3>Built for you</h3><span>Written on demand</span></div>
+          </div>
+          <p style="font-size:13.5px;color:var(--text-2);line-height:1.55">Take the placement test and Titan writes a course from your results — weakest topics first, each lesson with its own check question. It lands at the top of your library.</p>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section class="fl-sec">
+      <div class="fl-sec-head">
+        <p class="kicker">How it works</p>
+        <h2>Short lessons that stick.</h2>
+      </div>
+      <div class="fl-feats">
+        <div class="fl-feat">
+          <span class="fl-feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 1.5z"/><path d="M9 8h7M9 12h7"/></svg></span>
+          <h3>Read, then prove it</h3>
+          <p>Every lesson is a few short paragraphs in plain English, followed by a multiple-choice check. Get it right first time and you earn full points; miss it, re-read, and a late correct answer still counts.</p>
+        </div>
+        <div class="fl-feat">
+          <span class="fl-feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M17 5h2a2 2 0 0 1 0 4h-2M7 5H5a2 2 0 0 0 0 4h2"/></svg></span>
+          <h3>Points, ranks and streaks</h3>
+          <p>Lessons, checks and answer streaks all earn points that climb five ranks. A daily streak counts every day you learn something, and finishing a course earns a certificate.</p>
+        </div>
+        <div class="fl-feat">
+          <span class="fl-feat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 7-7"/><path d="M14 8h7v7"/></svg></span>
+          <h3>Video courses &amp; simulations</h3>
+          <p>Filmed walkthroughs and a full trading simulation are in the works. The articles, quick reviews and unit tests are live today.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- POINTS -->
+    <section class="fl-sec">
+      <div class="fl-points">
+        <div>
+          <p class="kicker">Progress you can see</p>
+          <h2>Every lesson is worth something.</h2>
+          <p>Points are awarded and stored on FAAM's backend, so they reflect what you actually did — not what a browser claims. Harder placement questions pay more, and streaks compound.</p>
+          <div class="fl-ranks">
+            <span class="fl-rank">Rookie</span>
+            <span class="fl-rank">Apprentice</span>
+            <span class="fl-rank">Analyst</span>
+            <span class="fl-rank">Strategist</span>
+            <span class="fl-rank top">Titan Scholar</span>
+          </div>
+        </div>
+        <div class="fl-ptable">
+          <div class="fl-prow"><span>Read a lesson</span><b>+20</b></div>
+          <div class="fl-prow"><span>Check question, first try</span><b>+50</b></div>
+          <div class="fl-prow"><span>Correct after a miss</span><b>+20</b></div>
+          <div class="fl-prow"><span>Three or more in a row</span><b>+15 each</b></div>
+          <div class="fl-prow"><span>Finish a course</span><b>+150</b></div>
+          <div class="fl-prow"><span>Perfect placement test</span><b>+100</b></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TITAN PLACEMENT -->
+    <section class="fl-sec">
+      <div class="fl-titan">
+        <span class="fl-titan-badge">POWERED BY TITAN</span>
+        <div class="fl-titan-copy">
+          <h2>Don't know where to start? Take the test.</h2>
+          <p>Fifteen questions drawn from a bank of thirty-five, covering fourteen topics. Titan grades them on the backend, tells you your strengths and weaknesses, and writes a course around exactly what you missed.</p>
+          <ul>
+            <li>The answer key never reaches your browser</li>
+            <li>Retakes pull different questions, so it stays honest</li>
+            <li>Harder questions are worth more points</li>
+            <li>Your generated course is saved and picks up where you left off</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- FINAL CTA -->
+    <section class="fl-final">
+      <h2>Open FAAM Learn and start.</h2>
+      <p>It's built into FAAM — one button in the top corner, full screen, free during beta.</p>
+      <div class="fl-cta">
+        <a href="../FAAM.zip" class="btn btn-primary btn-xl">Download FAAM for macOS</a>
+        <a href="../FAAM-windows.zip" class="btn btn-ghost">Windows</a>
+      </div>
+      <p class="fl-legal">FAAM Learn is educational material, not financial advice. Investing carries risk, including loss of principal.</p>
+      <div><a class="fl-back" href="../">← Back to FAAM</a></div>
+    </section>
+  </main>
+</body>
+</html>

@@ -389,7 +389,8 @@ function renderIdeas(d) {
         </div>
         ${it.thesis ? `<p class="idea-thesis">${escapeHtml(it.thesis)}</p>` : ""}
         ${it.action ? `<p class="idea-action"><strong>Idea:</strong> ${escapeHtml(it.action)}</p>` : ""}
-        ${it.risk ? `<p class="idea-risk">⚠ ${escapeHtml(it.risk)}</p>` : ""}
+        ${it.risk ? `<p class="idea-risk"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>${escapeHtml(it.risk)}</p>` : ""}
         <div class="idea-foot">
           ${ticks}
           ${(it.tickers && it.tickers.length) ? `<button type="button" class="idea-prep" data-prep="${escapeHtml(it.tickers[0])}">Set up order ▸</button>` : ""}
@@ -2205,12 +2206,872 @@ function renderScreenResults(data) {
 }
 
 /* ---------- Learn (AI tutor) ---------- */
-// FAAM Learn — full-screen hub. The lessons and simulator already exist, so the
-// placeholder hands off to those instead of being a dead end.
-function openLearn() {
+/* ---------- FAAM Learn — full-screen hub, powered by Titan ----------
+   The placement test is served AND graded by the backend, so Titan decides what
+   you know and writes the course. The browser only collects answers. */
+const LEARN_VIEWS = ["lvIntro", "lvHome", "lvCourse", "lvQuiz", "lvGrading", "lvResults", "lvReview"];
+let learnDiag = { questions: [], idx: 0, answers: {}, result: null, lessonIdx: 0 };
+// Points, rank and course progress — the backend owns all of it, this is a mirror.
+let learnProg = null;
+let learnCheckBusy = false;
+// The course currently open in the reader, and the catalog filters.
+let learnCourse_ = null;          // full course detail from /api/learn/course
+let learnCat = "all";
+let learnQuery = "";
+
+const LEARN_CAT_ICONS = {
+  all: "M4 6h16M4 12h16M4 18h10",
+  personal: "M12 3l2.2 4.9 5.3.6-4 3.6 1.1 5.2L12 14.7 7.4 17.3l1.1-5.2-4-3.6 5.3-.6z",
+  stocks: "M3 17l6-6 4 4 7-7M14 8h7v7",
+  risk: "M12 3l9 16H3z M12 10v4M12 17h.01",
+  strategy: "M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5",
+  crypto: "M12 3v18M8 7h5a3 3 0 0 1 0 6H8h6a3 3 0 0 1 0 6H8",
+  forex: "M4 12h16M12 4v16M7 8l-3 4 3 4M17 8l3 4-3 4",
+};
+
+/* ---------- Onboarding: Titan types its questions out ----------
+   Nine short questions before the library opens. The text is written a
+   character at a time, the answers slide in once the line lands, and the
+   whole thing is skippable. Answers shape which track we suggest. */
+const OB_KEY = "faam.learn.onboarded.v1";
+const OB_QUESTIONS = [
+  { id: "known", q: "Hi — I'm Titan. Before I open your library, nine quick questions. First: have you invested before?",
+    a: [["never", "Never — total beginner"], ["little", "A little, here and there"],
+        ["regular", "Yes, I invest regularly"], ["pro", "I trade actively"]] },
+  { id: "goal", q: "What are you hoping to get out of this?",
+    a: [["basics", "Understand the basics properly"], ["confidence", "Feel confident placing a trade"],
+        ["long", "Build long-term wealth"], ["trade", "Learn to trade short-term"]] },
+  { id: "market", q: "Which market interests you most right now?",
+    a: [["stocks", "Stocks"], ["crypto", "Crypto"], ["forex", "Forex"], ["all", "All of them"]] },
+  { id: "terms", q: "Be honest — how do these sound to you: P/E ratio, limit order, dividend yield?",
+    a: [["none", "Never heard of them"], ["some", "I know one or two"],
+        ["most", "I know most of them"], ["all", "I could explain all three"]] },
+  { id: "risk", q: "Your investment drops 20% in a week. What's your gut reaction?",
+    a: [["panic", "Sell — I couldn't sleep"], ["worry", "Worry, but hold"],
+        ["hold", "Stick to the plan"], ["buy", "Buy more at the lower price"]] },
+  { id: "time", q: "How much time can you give this each day?",
+    a: [["2", "About 2 minutes"], ["5", "5 minutes"], ["15", "15 minutes"], ["more", "As long as it takes"]] },
+  { id: "horizon", q: "When would you want to use the money you invest?",
+    a: [["soon", "Within a year"], ["mid", "In a few years"],
+        ["long", "In a decade or more"], ["unsure", "I haven't thought about it"]] },
+  { id: "style", q: "How do you learn best?",
+    a: [["read", "Reading at my own pace"], ["quiz", "Being quizzed on it"],
+        ["do", "Trying it hands-on"], ["mix", "A mix of everything"]] },
+  { id: "start", q: "Last one — where should we start you?",
+    a: [["zero", "From absolute zero"], ["refresh", "A quick refresher"],
+        ["deeper", "Skip ahead, go deeper"], ["test", "Test me and decide"]] },
+];
+
+let obState = { i: 0, answers: {}, typing: null, skipped: false };
+
+/* When each character should appear, measured from the start of the line.
+   Punctuation gets a beat so it reads like writing rather than a ticker. */
+function obSchedule(text) {
+  const at = [];
+  let t = 240;                                 // a pause before the first stroke
+  for (const ch of text) {
+    at.push(t);
+    t += ".!?".includes(ch) ? 250
+      : ",;:—".includes(ch) ? 130
+        : 20 + Math.random() * 22;
+  }
+  return { at, total: t };
+}
+
+/* Write one line out. Resolves when it lands.
+
+   Position is derived from elapsed time, not from a per-character timer chain:
+   background tabs clamp setTimeout to ~250ms, which turned a 3-second line into
+   a 30-second one. Driving off the clock means a late tick simply catches up. */
+function obType(text) {
+  const el = $("#obQ"), caret = $("#obCaret"), wave = $("#obWave");
+  if (!el) return Promise.resolve();
+  el.textContent = "";
+  caret.hidden = false;
+  wave.classList.add("on");
+
+  const { at } = obSchedule(text);
+  const start = performance.now();
+  return new Promise((resolve) => {
+    const finish = () => {
+      obState.typing = null;
+      el.textContent = text;
+      caret.hidden = true;
+      wave.classList.remove("on");
+      resolve();
+    };
+    const tick = () => {
+      if (obState.skipped) { finish(); return; }
+      const elapsed = performance.now() - start;
+      let n = 0;
+      while (n < at.length && at[n] <= elapsed) n++;
+      el.textContent = text.slice(0, n);
+      if (n < text.length) obState.typing = setTimeout(tick, 22);
+      else finish();
+    };
+    obState.typing = setTimeout(tick, 22);
+  });
+}
+
+function obRenderDots() {
+  const dots = $("#obDots");
+  if (!dots) return;
+  dots.innerHTML = "";
+  OB_QUESTIONS.forEach((_, i) => {
+    const d = document.createElement("i");
+    d.className = i < obState.i ? "done" : (i === obState.i ? "on" : "");
+    dots.appendChild(d);
+  });
+}
+
+async function obAsk() {
+  const step = OB_QUESTIONS[obState.i];
+  if (!step) return obFinish();
+  obRenderDots();
+  const wrap = $("#obAnswers");
+  wrap.innerHTML = "";
+  wrap.classList.remove("in");
+
+  await obType(step.q);
+
+  // Answers slide in one after another once the question has landed.
+  step.a.forEach(([value, label], k) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ob-a";
+    b.style.setProperty("--d", (k * 70) + "ms");
+    b.textContent = label;
+    b.addEventListener("click", () => obAnswer(value, b));
+    wrap.appendChild(b);
+  });
+  requestAnimationFrame(() => wrap.classList.add("in"));
+  setTimeout(() => wrap.classList.add("in"), 30);   // belt and braces if rAF is idle
+}
+
+function obAnswer(value, btn) {
+  const step = OB_QUESTIONS[obState.i];
+  if (!step) return;
+  obState.answers[step.id] = value;
+  $$("#obAnswers .ob-a").forEach((b) => { b.disabled = true; });
+  btn.classList.add("picked");
+  setTimeout(() => { obState.i++; obAsk(); }, 380);
+}
+
+/* Turn the answers into a starting track and a suggested pace. */
+function obRecommend() {
+  const a = obState.answers;
+  const cat = { stocks: "stocks", crypto: "crypto", forex: "forex", all: "all" }[a.market] || "all";
+  const beginner = a.known === "never" || a.terms === "none" || a.start === "zero";
+  const course = cat === "crypto" ? "crypto-101"
+    : cat === "forex" ? "forex-101"
+      : (a.goal === "trade" ? "strat-day" : (beginner ? "stocks-101" : "stocks-value"));
+  return { cat, course, wantsTest: a.start === "test", beginner };
+}
+
+async function obFinish() {
+  obRenderDots();
+  $("#obAnswers").innerHTML = "";
+  const rec = obRecommend();
+  await obType("Got it. I've lined up a starting point for you.");
+  const meta = ((learnProg || {}).library || []).find((c) => c.id === rec.course);
+  $("#obDoneP").textContent = rec.wantsTest
+    ? "Let's place you properly with the 15-question test."
+    : `Starting with ${meta ? meta.title : "the basics"} — then the rest of the library is yours.`;
+  $("#obGo").textContent = rec.wantsTest ? "Take the placement test →" : "Start my first course →";
+  $("#obDone").hidden = false;
+  try { localStorage.setItem(OB_KEY, JSON.stringify({ at: Date.now(), ...obState.answers })); } catch { /* private mode */ }
+
+  $("#obGo").onclick = () => {
+    if (rec.wantsTest) { learnStartDiagnostic(); return; }
+    learnCat = rec.cat === "all" ? "all" : rec.cat;
+    renderLearnLibrary();
+    openLearnCourse(rec.course);
+  };
+}
+
+function obStart() {
+  obState = { i: 0, answers: {}, typing: null, skipped: false };
+  $("#obDone").hidden = true;
+  $("#obQ").textContent = "";
+  learnView("lvIntro");
+  obAsk();
+}
+
+function obAbort() {
+  obState.skipped = true;
+  if (obState.typing) { clearTimeout(obState.typing); obState.typing = null; }
+  try { localStorage.setItem(OB_KEY, JSON.stringify({ at: Date.now(), skipped: true })); } catch { /* ignore */ }
+  renderLearnLibrary();
+  learnView("lvHome");
+}
+
+function obSeen() {
+  try { return !!localStorage.getItem(OB_KEY); } catch { return false; }
+}
+
+async function openLearn() {
   const d = $("#learnDialog");
   if (!d) return;
   if (!d.open) d.showModal();
+  await loadLearnProgress();
+  renderLearnLibrary();
+  // First visit gets the introduction; after that, straight to the library.
+  if (!obSeen()) obStart();
+  else learnView("lvHome");
+}
+
+/* Points banner — pts, rank, the bar to the next rank, and the day streak. */
+function renderLearnXp() {
+  const box = $("#learnXp");
+  const stk = $("#learnStreak");
+  if (!box) return;
+  if (!learnProg || learnProg.auth === false) {
+    box.hidden = true;
+    if (stk) stk.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  const r = learnProg.rank || {};
+  $("#lxpPts").textContent = `${(learnProg.xp || 0).toLocaleString()} pts`;
+  $("#lxpRank").textContent = r.name || "Rookie";
+  $("#lxpFill").style.width = Math.max(0, Math.min(100, r.pct || 0)) + "%";
+  $("#lxpNext").textContent = r.next ? `${r.toNext} to ${r.next}` : "Top rank";
+  if (stk) {
+    const days = learnProg.days || 0;
+    stk.hidden = days <= 0;
+    $("#lstDays").textContent = days;
+    stk.title = `${days} day${days === 1 ? "" : "s"} in a row · best ${learnProg.bestDays || days}`;
+  }
+}
+
+/* ---------- The catalog ---------- */
+function renderLearnLibrary() {
+  const p = learnProg || {};
+  const lib = p.library || [];
+
+  // Category rail, with a live count on each
+  const rail = $("#libCats");
+  if (rail) {
+    const cats = [{ id: "all", name: "All courses" }].concat(p.categories || []);
+    if (lib.some((c) => c.personal)) cats.splice(1, 0, { id: "personal", name: "Built for you" });
+    rail.innerHTML = "";
+    cats.forEach((c) => {
+      const n = c.id === "all" ? lib.length : lib.filter((x) => x.cat === c.id).length;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "lib-cat" + (learnCat === c.id ? " on" : "");
+      b.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${LEARN_CAT_ICONS[c.id] || LEARN_CAT_ICONS.all}"/></svg>
+        <span></span><i>${n}</i>`;
+      b.querySelector("span").textContent = c.name;
+      b.addEventListener("click", () => { learnCat = c.id; renderLearnLibrary(); });
+      rail.appendChild(b);
+    });
+  }
+
+  // Lifetime stats
+  if ($("#libStatCourses")) {
+    $("#libStatCourses").textContent = p.coursesDone || 0;
+    $("#libStatLessons").textContent = p.lessonsDone || 0;
+    $("#libStatCerts").textContent = (p.certs || []).length;
+  }
+
+  // Placement banner: only worth showing until they've taken the test
+  const place = $("#libPlace");
+  if (place) {
+    const taken = (p.attempts || 0) > 0;
+    place.hidden = false;
+    $("#libPlaceH").textContent = taken ? "Retake your placement test" : "Not sure where to start?";
+    $("#libPlaceP").textContent = taken
+      ? `Best score ${p.best || 0}. A retake pulls different questions and rewrites your personal course.`
+      : "Take the 15-question placement test. Titan grades it and writes a course around exactly what you missed.";
+    $("#learnStartDiag").textContent = taken ? "Retake test →" : "Start placement test →";
+  }
+
+  // Filtered cards
+  const q = learnQuery.trim().toLowerCase();
+  const shown = lib.filter((c) => {
+    if (learnCat === "personal" ? !c.personal : (learnCat !== "all" && c.cat !== learnCat)) return false;
+    return !q || (c.title + " " + c.blurb + " " + c.level).toLowerCase().includes(q);
+  });
+  const cat = (p.categories || []).find((c) => c.id === learnCat);
+  $("#libTitle").textContent = learnCat === "all" ? "All courses"
+    : (learnCat === "personal" ? "Built for you" : (cat ? cat.name : "Courses"));
+  $("#libSub").textContent = learnCat === "all"
+    ? "Short lessons on stocks, risk, strategy, crypto and forex. Two to four minutes each."
+    : (learnCat === "personal" ? "Written by Titan from your placement test."
+      : (cat ? cat.blurb : ""));
+
+  const grid = $("#libGrid");
+  grid.innerHTML = "";
+  shown.forEach((c) => grid.appendChild(learnCourseCard(c)));
+  $("#libEmpty").hidden = shown.length > 0;
+}
+
+/* One catalog card: progress ring, level, lesson count, XP on offer. */
+function learnCourseCard(c) {
+  const s = c.progress || {};
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "lib-card" + (c.personal ? " personal" : "") + (s.done ? " done" : "");
+  el.innerHTML = `
+    <div class="lc-top">
+      <span class="lc-level"></span>
+      ${s.certified ? `<span class="lc-cert" title="Certificate earned"><svg viewBox="0 0 24 24" width="15" height="15" fill="none"
+        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="6"/><path d="M9.5 14.3L8 22l4-2.2L16 22l-1.5-7.7"/></svg></span>` : ""}
+    </div>
+    <h3></h3>
+    <p></p>
+    <div class="lc-foot">
+      <span class="lc-meta"></span>
+      <span class="lc-xp"></span>
+    </div>
+    <div class="lc-bar"><i></i></div>
+    <span class="lc-pct"></span>`;
+  el.querySelector(".lc-level").textContent = c.personal ? "For you" : c.level;
+  el.querySelector("h3").textContent = c.title;
+  el.querySelector("p").textContent = c.blurb;
+  el.querySelector(".lc-meta").textContent = `${c.lessons} lessons · ${c.mins} min`;
+  el.querySelector(".lc-xp").textContent = s.earned > 0 ? `+${s.earned} pts` : `${c.xp} pts`;
+  if (s.earned > 0) el.querySelector(".lc-xp").classList.add("got");
+  el.querySelector(".lc-bar i").style.width = (s.pct || 0) + "%";
+  el.querySelector(".lc-pct").textContent = s.done ? "Complete"
+    : (s.read > 0 ? `${s.read}/${s.total}` : "");
+  el.addEventListener("click", () => openLearnCourse(c.id));
+  return el;
+}
+
+/* ---------- Course detail ---------- */
+async function openLearnCourse(id) {
+  try {
+    const d = await (await fetch(`/api/learn/course?id=${encodeURIComponent(id)}`)).json();
+    if (d.error) throw new Error(d.error);
+    learnCourse_ = d;
+    renderLearnCourse();
+    learnView("lvCourse");
+    // Start tracking only once the view is visible and laid out. setTimeout,
+    // not rAF, so this still runs if the window happens to be backgrounded.
+    setTimeout(observeArticleSections, 0);
+  } catch {
+    toast("Couldn't open that course.");
+  }
+}
+
+/* Sections mark themselves read once you actually reach them — that's what
+   makes it an article rather than a list.
+
+   This deliberately does NOT use IntersectionObserver. FAAM Learn is a
+   showModal() dialog, so it lives in the browser's top layer, and observers do
+   not fire for its children — not with the implicit viewport root, and not with
+   the scroll panel passed as an explicit root either. Measuring rectangles on
+   scroll is boring, but it actually works. */
+let learnScrollHandler = null;
+
+function stopArticleTracking() {
+  const body = $(".learn-fs-body");
+  if (learnScrollHandler && body) body.removeEventListener("scroll", learnScrollHandler);
+  learnScrollHandler = null;
+}
+
+function observeArticleSections() {
+  stopArticleTracking();
+  const body = $(".learn-fs-body");
+  if (!learnProg || !body) return;            // signed out: read freely, no points
+  let last = 0;
+
+  const check = () => {
+    const br = body.getBoundingClientRect();
+    if (br.height < 1) return;                // panel not laid out yet
+    $$("#lcArticle .art-sec").forEach((el) => {
+      const i = Number(el.dataset.i);
+      if (el.dataset.counted === "1" || (learnCourse()[i] || {}).read) return;
+      const r = el.getBoundingClientRect();
+      // A section inside a still-hidden view measures 0 tall. Without this the
+      // threshold works out to 0, every section clears it at once, and the whole
+      // article is marked read the instant the course opens.
+      if (r.height < 1) return;
+      const visible = Math.max(0, Math.min(br.bottom, r.bottom) - Math.max(br.top, r.top));
+      // Sections can be taller than the panel, so measure against whichever is
+      // smaller — otherwise a long section could never reach the threshold.
+      if (visible >= Math.min(r.height, br.height) * 0.55) {
+        el.dataset.counted = "1";
+        markSectionRead(i);
+      }
+    });
+  };
+
+  // A plain time throttle, not requestAnimationFrame: rAF is suspended while the
+  // window is backgrounded, which would latch the "queued" flag on forever and
+  // silently stop tracking. Measuring five rectangles is cheap enough inline.
+  learnScrollHandler = () => {
+    const now = Date.now();
+    if (now - last < 120) return;
+    last = now;
+    check();
+  };
+  body.addEventListener("scroll", learnScrollHandler, { passive: true });
+  check();                                    // whatever is already on screen counts
+}
+
+async function markSectionRead(i) {
+  try {
+    const d = await (await fetch("/api/learn/lesson/read", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ i, course: learnCourseId() }),
+    })).json();
+    if (!d.ok) return;
+    learnApplyCourse(d, "section read");
+    // Repaint just the changed chrome — re-rendering mid-scroll would jump.
+    const sec = $$("#lcArticle .art-sec")[i];
+    if (sec) sec.classList.add("read");
+    updateCourseChrome();
+  } catch { /* points are a bonus; never block reading */ }
+}
+
+/* Hero numbers, ring, and the review gate — everything except the article body. */
+function updateCourseChrome() {
+  const c = learnCourse_;
+  if (!c) return;
+  const s = c.progress || {};
+  $("#lcFill").style.width = (s.pct || 0) + "%";
+  $("#lcProgText").textContent =
+    `${s.read || 0} of ${s.total || 0} sections · ${s.earned || 0} pts earned`;
+  $("#lcCert").hidden = !s.certified;
+  $("#lcRing").style.setProperty("--pct", (s.pct || 0));
+  $("#lcRing").dataset.pct = (s.pct || 0) + "%";
+
+  const unlocked = !!s.reviewUnlocked;
+  $("#rvLocked").hidden = unlocked || !s.reviewLen;
+  const showIntro = unlocked && $("#rvQuiz").hidden && $("#rvResult").hidden;
+  $("#rvIntro").hidden = !showIntro;
+  if (!unlocked && s.reviewLen) {
+    $("#rvLockedP").textContent =
+      `${(s.total || 0) - (s.read || 0)} section${(s.total || 0) - (s.read || 0) === 1 ? "" : "s"} left to unlock the ${s.reviewLen}-question review.`;
+  }
+  if (showIntro) {
+    $("#rvIntroH").textContent = s.reviewPassed ? "Review passed" : "Ready for the review?";
+    $("#rvIntroP").textContent = s.reviewPassed
+      ? `Best score ${s.reviewBest}/${s.reviewLen}. Retake it any time to improve.`
+      : `${s.reviewLen} questions on everything above. Get ${s.reviewPass} right to pass and earn your certificate.`;
+    $("#rvStart").textContent = s.reviewAttempts > 0 ? "Retake the review →" : "Start the review →";
+  }
+}
+
+function renderLearnCourse() {
+  const c = learnCourse_;
+  if (!c) return;
+  const s = c.progress || {};
+  $("#lcCat").textContent = c.cat === "personal" ? "Built for you"
+    : ((((learnProg || {}).categories || []).find((x) => x.id === c.cat) || {}).name || c.cat);
+  $("#lcLevel").textContent = c.level;
+  $("#lcMins").textContent = `${c.mins} min`;
+  $("#lcTitle").textContent = c.title;
+  $("#lcBlurb").textContent = c.blurb;
+  const start = $("#lcStart");
+  start.textContent = s.read > 0 && !s.articleDone ? "Continue reading →"
+    : (s.articleDone ? "Back to the top ↑" : "Start reading →");
+
+  // Reset the review panel whenever a different course is opened.
+  $("#rvQuiz").hidden = true;
+  $("#rvResult").hidden = true;
+  learnReview = { questions: c.review || [], idx: 0, answers: {}, result: null };
+
+  const wrap = $("#lcArticle");
+  wrap.innerHTML = "";
+  (c.lessons || []).forEach((l, i) => {
+    const sec = document.createElement("section");
+    sec.className = "art-sec" + (l.read ? " read" : "");
+    sec.dataset.i = i;
+    sec.innerHTML = `
+      <header class="art-h">
+        <span class="art-n"></span>
+        <h2></h2>
+      </header>
+      <p class="art-body"></p>`;
+    sec.querySelector(".art-n").textContent = String(i + 1);
+    sec.querySelector("h2").textContent = l.t || "";
+    sec.querySelector(".art-body").textContent = l.b || "";
+    if (l.q && (l.o || []).length) sec.appendChild(buildSectionTest(l, i));
+    wrap.appendChild(sec);
+  });
+
+  updateCourseChrome();
+  observeArticleSections();
+}
+
+/* An inline section test, graded on the backend like everything else. */
+function buildSectionTest(l, i) {
+  const box = document.createElement("div");
+  box.className = "sec-test";
+  const passed = l.check === "right" || l.check === "late";
+  box.innerHTML = `
+    <div class="st-head">
+      <span class="st-tag">Quick review</span>
+      <span class="st-worth"></span>
+    </div>
+    <p class="st-q"></p>
+    <div class="learn-opts st-opts"></div>
+    <p class="st-fb" hidden></p>`;
+  const worth = box.querySelector(".st-worth");
+  worth.textContent = passed
+    ? `+${learnProg ? (l.check === "right" ? learnProg.points.check : learnProg.points.retry) : 50} pts earned`
+    : `+${learnProg ? learnProg.points.check : 50} pts`;
+  worth.classList.toggle("got", passed);
+  box.querySelector(".st-q").textContent = l.q;
+
+  const opts = box.querySelector(".st-opts");
+  (l.o || []).forEach((text, k) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "learn-opt" + (passed && l.ans === k ? " right" : "");
+    b.disabled = passed;
+    b.innerHTML = `<span class="lo-key">${String.fromCharCode(65 + k)}</span><span></span>`;
+    b.querySelector("span:last-child").textContent = text;
+    b.addEventListener("click", () => submitSectionTest(i, k, box));
+    opts.appendChild(b);
+  });
+
+  const fb = box.querySelector(".st-fb");
+  fb.hidden = !l.check;
+  if (passed) {
+    fb.className = "st-fb ok";
+    fb.textContent = l.check === "right" ? "Correct — points banked." : "Correct on the retry — points banked.";
+  } else if (l.check === "wrong") {
+    fb.className = "st-fb bad";
+    fb.textContent = `Not quite. Re-read the section and try again — a late correct answer still earns ${learnProg ? learnProg.points.retry : 20} pts.`;
+  }
+  return box;
+}
+
+async function submitSectionTest(i, chosen, box) {
+  if (learnCheckBusy) return;
+  if (!learnProg) { toast("Log in to earn points for section tests."); return; }
+  learnCheckBusy = true;
+  box.querySelectorAll(".learn-opt").forEach((b) => { b.disabled = true; });
+  try {
+    const d = await (await fetch("/api/learn/lesson/check", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ i, chosen, course: learnCourseId() }),
+    })).json();
+    if (d.error) throw new Error(d.error);
+    const opts = [...box.querySelectorAll(".learn-opt")];
+    if (opts[chosen]) opts[chosen].classList.add(d.correct ? "right" : "wrong");
+    const fb = box.querySelector(".st-fb");
+    fb.hidden = false;
+    fb.className = "st-fb " + (d.correct ? "ok" : "bad");
+    fb.textContent = d.correct
+      ? (d.gained ? `Correct — +${d.gained} pts.` : "Correct.")
+      : `Not quite. Re-read the section and try again — a late correct answer still earns ${d.points.retry} pts.`;
+    learnApplyCourse(d, d.correct ? "section test passed" : "");
+    // Swap in a fresh test block so state (and retry) reflects the backend.
+    const l = learnCourse()[i] || {};
+    const replace = () => {
+      const fresh = buildSectionTest(l, i);
+      box.replaceWith(fresh);
+      updateCourseChrome();
+    };
+    if (d.correct) replace(); else setTimeout(replace, 1600);
+  } catch {
+    toast("Couldn't reach Titan. Try that again.");
+    box.querySelectorAll(".learn-opt").forEach((b) => { b.disabled = false; });
+  } finally {
+    learnCheckBusy = false;
+  }
+}
+
+async function loadLearnProgress() {
+  try {
+    const d = await (await fetch("/api/learn/progress")).json();
+    learnProg = d && d.auth === false ? null : d;
+  } catch { learnProg = null; }
+  renderLearnXp();
+}
+
+/* Fold a points response back into the mirror, and float what was just earned. */
+function learnApplyProgress(d, label) {
+  if (!d) return;
+  learnProg = d;
+  renderLearnXp();
+  if (d.gained > 0) {
+    learnFloatPoints(d.gained);
+    toast(`+${d.gained} pts${label ? " · " + label : ""}`);
+  }
+}
+
+/* Fold a lesson/review response back in: it carries both the refreshed course
+   and the new totals. */
+function learnApplyCourse(d, label) {
+  if (d && d.course) learnCourse_ = d.course;
+  learnApplyProgress(d, label);
+}
+
+function learnFloatPoints(n) {
+  const host = $("#learnXp");
+  if (!host || host.hidden) return;
+  const s = document.createElement("span");
+  s.className = "lxp-pop";
+  s.textContent = `+${n}`;
+  host.appendChild(s);
+  setTimeout(() => s.remove(), 1400);
+}
+
+function learnView(id) {
+  LEARN_VIEWS.forEach((v) => { const el = $("#" + v); if (el) el.hidden = v !== id; });
+  const body = $(".learn-fs-body");
+  if (body) body.scrollTop = 0;
+}
+
+async function learnStartDiagnostic() {
+  learnView("lvGrading");
+  $("#lvGrading").querySelector("h2").textContent = "Loading your placement test…";
+  try {
+    const d = await (await fetch("/api/titan/diagnostic")).json();
+    learnDiag = { questions: d.questions || [], idx: 0, answers: {}, result: null, lessonIdx: 0 };
+    if (!learnDiag.questions.length) throw new Error("no questions");
+    $("#lvGrading").querySelector("h2").textContent = "Titan is reviewing your answers…";
+    learnView("lvQuiz");
+    renderLearnQuestion();
+  } catch {
+    $("#lvGrading").querySelector("h2").textContent = "Couldn't load the test.";
+    toast("Couldn't reach Titan. Try again in a moment.");
+    setTimeout(() => learnView("lvHome"), 1200);
+  }
+}
+
+function renderLearnQuestion() {
+  const q = learnDiag.questions[learnDiag.idx];
+  if (!q) return;
+  const total = learnDiag.questions.length;
+  $("#lqCount").textContent = `Question ${learnDiag.idx + 1} of ${total}`;
+  $("#lqTopic").textContent = q.topic || "";
+  const pts = $("#lqPts");
+  if (pts) {
+    pts.textContent = `${q.pts || 10} pts`;
+    // Harder questions pay more — show which tier this one is.
+    pts.className = "lq-pts d" + (q.d || 1);
+    pts.title = ["", "Easier — 10 pts", "Medium — 20 pts", "Harder — 30 pts"][q.d || 1] || "";
+  }
+  $("#lqText").textContent = q.q;
+  $("#lqFill").style.width = ((learnDiag.idx) / total * 100) + "%";
+  const chosen = learnDiag.answers[q.id];
+  const opts = $("#lqOpts");
+  opts.innerHTML = "";
+  (q.a || []).forEach((text, i) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "learn-opt" + (chosen === i ? " picked" : "");
+    b.innerHTML = `<span class="lo-key">${String.fromCharCode(65 + i)}</span><span></span>`;
+    b.querySelector("span:last-child").textContent = text;
+    b.addEventListener("click", () => {
+      learnDiag.answers[q.id] = i;
+      renderLearnQuestion();
+    });
+    opts.appendChild(b);
+  });
+  $("#lqBack").disabled = learnDiag.idx === 0;
+  const next = $("#lqNext");
+  next.disabled = chosen == null;
+  next.textContent = learnDiag.idx === total - 1 ? "Finish — grade my test ✓" : "Next →";
+}
+
+async function learnQuizNext() {
+  const total = learnDiag.questions.length;
+  if (learnDiag.idx < total - 1) { learnDiag.idx++; renderLearnQuestion(); return; }
+  // Submit to Titan for grading
+  learnView("lvGrading");
+  const answers = learnDiag.questions.map((q) => ({ id: q.id, chosen: learnDiag.answers[q.id] }));
+  try {
+    const r = await fetch("/api/titan/diagnostic/grade", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answers }),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    learnDiag.result = d;
+    learnDiag.lessonIdx = 0;
+    // Titan banks the points server-side and hands back the new totals. The
+    // catalog gains a "Built for you" course, so re-render it too.
+    if (d.progress) { learnProg = d.progress; renderLearnXp(); renderLearnLibrary(); }
+    renderLearnResults();
+    learnView("lvResults");
+    if (d.earned > 0) learnFloatPoints(d.earned);
+  } catch {
+    toast("Titan couldn't grade that. Try again.");
+    learnView("lvQuiz");
+  }
+}
+
+function renderLearnResults() {
+  const d = learnDiag.result || {};
+  $("#lrScore").textContent = `${d.score ?? 0}/${d.total ?? 0}`;
+  $("#lrLevel").textContent = d.level || "Your level";
+  $("#lrSummary").textContent = d.summary || "";
+  const fill = (sel, items, empty) => {
+    const ul = $(sel);
+    ul.innerHTML = "";
+    const list = (items && items.length) ? items : [empty];
+    list.forEach((t) => { const li = document.createElement("li"); li.textContent = t; ul.appendChild(li); });
+  };
+  fill("#lrStrengths", d.strengths, "We'll find these as you learn.");
+  fill("#lrWeaknesses", d.weaknesses, "Nothing major — keep reinforcing the basics.");
+
+  // Points banked for the test itself, difficulty-weighted by Titan.
+  const earnedEl = $("#lrEarned");
+  if (earnedEl) {
+    const e = d.earned;
+    earnedEl.hidden = !(e > 0);
+    if (e > 0) {
+      earnedEl.innerHTML = `<b>+${e} pts</b> earned${d.perfect
+        ? ` · <svg class="lr-bull" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+             stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/></svg> perfect test bonus`
+        : ""}`;
+    }
+  }
+
+  // The course Titan just wrote. It now lives in the catalog as "Built for you",
+  // so a click here opens it through the same course page as everything else.
+  const course = d.course || [];
+  const ol = $("#lrCourse");
+  ol.innerHTML = "";
+  course.forEach((c, i) => {
+    const li = document.createElement("li");
+    li.className = "learn-course-item";
+    li.innerHTML = `<span class="lci-n"></span><div><b></b><p></p></div><span class="lci-pts"></span>`;
+    li.querySelector(".lci-n").textContent = String(i + 1);
+    li.querySelector("b").textContent = c.t || "";
+    li.querySelector("p").textContent = c.b || "";
+    li.querySelector(".lci-pts").textContent = `${(c.pts || 20) + 20} pts`;
+    li.addEventListener("click", () => openLearnCourse("personal"));
+    ol.appendChild(li);
+  });
+
+  $("#lrCourseMeta").textContent =
+    (d.source === "titan-ai" ? "Generated by Titan for your results" : "Built from your results")
+    + (course.length ? ` · ${course.length} lessons` : "");
+  const missed = (d.detail || []).filter((x) => !x.correct);
+  $("#lrReview").hidden = missed.length === 0;
+  const start = $("#lrStart");
+  if (start) start.textContent = "Start your course →";
+}
+
+function renderLearnReview() {
+  const missed = ((learnDiag.result || {}).detail || []).filter((x) => !x.correct);
+  const wrap = $("#lrReviewList");
+  wrap.innerHTML = "";
+  if (!missed.length) {
+    wrap.innerHTML = `<p class="muted">You didn't miss any — nice work.</p>`;
+    return;
+  }
+  missed.forEach((m) => {
+    const div = document.createElement("div");
+    div.className = "learn-rev-item";
+    div.innerHTML = `<span class="lri-topic"></span><p class="lri-q"></p>
+      <p class="lri-line lri-wrong"><span>You said</span><b></b></p>
+      <p class="lri-line lri-right"><span>Correct</span><b></b></p>`;
+    div.querySelector(".lri-topic").textContent = m.topic || "";
+    div.querySelector(".lri-q").textContent = m.q || "";
+    div.querySelectorAll("b")[0].textContent = m.your || "—";
+    div.querySelectorAll("b")[1].textContent = m.answer || "";
+    wrap.appendChild(div);
+  });
+}
+
+/* ---------- End-of-unit review ---------- */
+let learnReview = { questions: [], idx: 0, answers: {}, result: null };
+
+function startLearnReview() {
+  const c = learnCourse_ || {};
+  learnReview = { questions: c.review || [], idx: 0, answers: {}, result: null };
+  if (!learnReview.questions.length) { toast("Read the whole article first."); return; }
+  $("#rvIntro").hidden = true;
+  $("#rvResult").hidden = true;
+  $("#rvQuiz").hidden = false;
+  renderReviewQuestion();
+  $("#lcReviewBlock").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function renderReviewQuestion() {
+  const q = learnReview.questions[learnReview.idx];
+  if (!q) return;
+  const total = learnReview.questions.length;
+  $("#rvCount").textContent = `Question ${learnReview.idx + 1} of ${total}`;
+  $("#rvFill").style.width = (learnReview.idx / total * 100) + "%";
+  $("#rvQ").textContent = q.q;
+  const chosen = learnReview.answers[learnReview.idx];
+  const wrap = $("#rvOpts");
+  wrap.innerHTML = "";
+  (q.o || []).forEach((text, k) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "learn-opt" + (chosen === k ? " picked" : "");
+    b.innerHTML = `<span class="lo-key">${String.fromCharCode(65 + k)}</span><span></span>`;
+    b.querySelector("span:last-child").textContent = text;
+    b.addEventListener("click", () => { learnReview.answers[learnReview.idx] = k; renderReviewQuestion(); });
+    wrap.appendChild(b);
+  });
+  $("#rvBack").disabled = learnReview.idx === 0;
+  const next = $("#rvNext");
+  next.disabled = chosen == null;
+  next.textContent = learnReview.idx === total - 1 ? "Submit review ✓" : "Next →";
+}
+
+async function reviewNext() {
+  const total = learnReview.questions.length;
+  if (learnReview.idx < total - 1) { learnReview.idx++; renderReviewQuestion(); return; }
+  const answers = learnReview.questions.map((_, i) => learnReview.answers[i]);
+  $("#rvNext").disabled = true;
+  try {
+    const d = await (await fetch("/api/learn/review", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ course: learnCourseId(), answers }),
+    })).json();
+    if (d.error) throw new Error(d.error);
+    learnReview.result = d;
+    learnApplyCourse(d, d.passed ? "review passed" : "");
+    renderReviewResult(d);
+  } catch (e) {
+    toast("Couldn't submit the review. Try again.");
+    $("#rvNext").disabled = false;
+  }
+}
+
+function renderReviewResult(d) {
+  $("#rvQuiz").hidden = true;
+  $("#rvIntro").hidden = true;
+  $("#rvResult").hidden = false;
+  const box = $("#rvResult");
+  box.classList.toggle("passed", !!d.passed);
+  $("#rvScore").textContent = `${d.score}/${d.total}`;
+  $("#rvVerdict").textContent = d.passed ? "Passed" : "Not quite yet";
+  $("#rvVerdictP").textContent = d.passed
+    ? (d.firstPass ? `Certificate earned — +${d.gained} pts banked.`
+      : (d.gained ? `Best score improved — +${d.gained} pts.` : "You've already passed this unit."))
+    : `You need ${d.pass} of ${d.total} to pass. Re-read the sections you missed and try again.`;
+
+  const wrap = $("#rvAnswers");
+  wrap.innerHTML = "";
+  (d.detail || []).forEach((x, i) => {
+    const row = document.createElement("div");
+    row.className = "rv-ans " + (x.correct ? "ok" : "bad");
+    row.innerHTML = `<span class="rv-ans-n"></span><div><p class="rv-ans-q"></p>
+      <p class="rv-ans-line"></p></div>`;
+    row.querySelector(".rv-ans-n").textContent = String(i + 1);
+    row.querySelector(".rv-ans-q").textContent = x.q;
+    row.querySelector(".rv-ans-line").textContent = x.correct
+      ? x.answer
+      : `You said “${x.your}” · Correct: ${x.answer}`;
+    wrap.appendChild(row);
+  });
+  updateCourseChrome();
+  box.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+/* The sections the article is showing — always the currently open course. */
+function learnCourse() {
+  return (learnCourse_ || {}).lessons || [];
+}
+function learnCourseId() {
+  return (learnCourse_ || {}).id || "personal";
 }
 
 /* ---------- Add-position mode (shares / dollars) ---------- */
@@ -2440,7 +3301,11 @@ function openProDialog() {
     $("#proPlans").style.display = "none";
     const act = $("#proActive");
     act.hidden = false;
-    act.innerHTML = "🎉 <strong>Everything's free while FAAM is in beta.</strong><br>" +
+    act.innerHTML =
+      '<svg class="beta-ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l2.6 6.6L21 9.7l-4.8 4.5 1.2 6.6L12 17.7 ' +
+      '6.6 20.8l1.2-6.6L3 9.7l6.4-1.1z"/></svg>' +
+      "<strong>Everything's free while FAAM is in beta.</strong><br>" +
       "Every model, forecast, and tool is unlocked — no upgrade needed.";
     openDialog("proDialog");
     return;
@@ -3402,20 +4267,93 @@ let paperState = null;
 let paperSide = "buy";
 let paperEstTimer = null;
 
+let paperTimer = null;
+let paperHistory = [];          // sampled equity points for the chart
+const PAPER_POLL_MS = 6000;     // "changes constantly" — repriced every 6s
+const PAPER_HIST_KEY = "faam_paper_equity_hist";
+
 async function openPaper() {
-  openDialog("paperDialog", "#paperSymbol");
+  const d = $("#paperDialog");
+  if (!d) return;
+  if (!d.open) d.showModal();
   setPaperMsg("");
+  loadPaperHistory();
   await refreshPaper();
+  startPaperLive();
 }
 
-async function refreshPaper() {
+function closePaper() {
+  stopPaperLive();
+  const d = $("#paperDialog");
+  if (d && d.open) d.close();
+}
+
+// Live repricing: keeps the portfolio moving while the panel is open, and stops
+// the moment it closes so we're not polling in the background.
+function startPaperLive() {
+  stopPaperLive();
+  paperTimer = setInterval(() => {
+    if (!$("#paperDialog")?.open || document.hidden) return;
+    refreshPaper(true);
+  }, PAPER_POLL_MS);
+}
+function stopPaperLive() {
+  if (paperTimer) { clearInterval(paperTimer); paperTimer = null; }
+}
+
+function loadPaperHistory() {
+  try { paperHistory = JSON.parse(localStorage.getItem(PAPER_HIST_KEY)) || []; }
+  catch { paperHistory = []; }
+}
+function pushPaperHistory(equity) {
+  if (typeof equity !== "number" || !isFinite(equity)) return;
+  const last = paperHistory[paperHistory.length - 1];
+  if (last && Math.abs(last - equity) < 0.005) return;   // skip flat duplicates
+  paperHistory.push(Math.round(equity * 100) / 100);
+  if (paperHistory.length > 240) paperHistory = paperHistory.slice(-240);
+  try { localStorage.setItem(PAPER_HIST_KEY, JSON.stringify(paperHistory)); } catch {}
+}
+
+async function refreshPaper(quiet = false) {
+  const live = $("#pfLive");
+  if (live && quiet) live.classList.add("ticking");
   try {
     const r = await fetch("/api/paper");
     paperState = await r.json();
   } catch {
-    paperState = { error: "offline" };
+    if (!quiet) paperState = { error: "offline" };
+  }
+  if (paperState && paperState.auth !== false && typeof paperState.equity === "number") {
+    pushPaperHistory(paperState.equity);
   }
   renderPaper();
+  if (live) setTimeout(() => live.classList.remove("ticking"), 600);
+}
+
+// Sparkline of portfolio value. Green above the first sample, red below.
+function renderPaperChart() {
+  const lineEl = $("#pfLine"), areaEl = $("#pfArea"), note = $("#pfChartNote");
+  if (!lineEl || !areaEl) return;
+  const pts = paperHistory.slice();
+  if (pts.length < 2) {
+    lineEl.setAttribute("d", "");
+    areaEl.setAttribute("d", "");
+    if (note) note.hidden = false;
+    return;
+  }
+  if (note) note.hidden = true;
+  const W = 600, H = 180, pad = 6;
+  const min = Math.min(...pts), max = Math.max(...pts);
+  const span = (max - min) || 1;
+  const x = (i) => (i / (pts.length - 1)) * W;
+  const y = (v) => pad + (1 - (v - min) / span) * (H - pad * 2);
+  let d = `M ${x(0).toFixed(1)} ${y(pts[0]).toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) d += ` L ${x(i).toFixed(1)} ${y(pts[i]).toFixed(1)}`;
+  lineEl.setAttribute("d", d);
+  areaEl.setAttribute("d", `${d} L ${W} ${H} L 0 ${H} Z`);
+  const up = pts[pts.length - 1] >= pts[0];
+  const chart = $("#pfChart");
+  if (chart) chart.classList.toggle("down", !up);
 }
 
 function setPaperMsg(text, bad = false) {
@@ -3431,78 +4369,140 @@ function setPaperSide(side) {
   const buy = $("#paperBuy"), sell = $("#paperSell");
   if (buy) { buy.classList.toggle("on", paperSide === "buy"); buy.setAttribute("aria-pressed", paperSide === "buy" ? "true" : "false"); }
   if (sell) { sell.classList.toggle("on", paperSide === "sell"); sell.setAttribute("aria-pressed", paperSide === "sell" ? "true" : "false"); }
+  const ticket = $(".pf-ticket");
+  if (ticket) ticket.classList.toggle("selling", paperSide === "sell");
   const place = $("#paperPlace");
-  if (place) place.textContent = paperSide === "buy" ? "Place practice trade" : "Sell shares";
+  if (place) place.textContent = paperSide === "buy" ? "Review & buy" : "Review & sell";
   updatePaperEstimate();
+}
+
+// "Max": biggest whole-share order the account can currently support.
+async function paperMaxShares() {
+  const sym = ($("#paperSymbol")?.value || "").trim().toUpperCase();
+  if (!sym) { setPaperMsg("Enter a symbol first.", true); return; }
+  if (paperSide === "sell") {
+    const held = ((paperState || {}).positions || []).find((p) => p.symbol === sym);
+    if (!held) { setPaperMsg(`You don't hold ${sym}.`, true); return; }
+    $("#paperShares").value = held.shares;
+    updatePaperEstimate();
+    return;
+  }
+  try {
+    const q = await (await fetch(`/api/stock/${encodeURIComponent(sym)}`)).json();
+    const px = q && q.price;
+    const cash = (paperState || {}).cash;
+    if (!px || cash == null) { setPaperMsg("Couldn't price that.", true); return; }
+    const n = Math.floor(cash / px);
+    if (n < 1) { setPaperMsg(`Not enough buying power for one share of ${sym}.`, true); return; }
+    $("#paperShares").value = n;
+    updatePaperEstimate();
+  } catch { setPaperMsg("Couldn't price that.", true); }
 }
 
 function renderPaper() {
   const d = paperState || {};
-  const posWrap = $("#paperPositions"), trWrap = $("#paperTrades");
+  const posWrap = $("#pfPositions"), trWrap = $("#pfTrades");
   if (d.auth === false) {
-    ["paperEquity", "paperCash", "paperInvested", "paperPl"].forEach((id) => { if ($("#" + id)) $("#" + id).textContent = "—"; });
-    if (posWrap) posWrap.innerHTML = `<p class="paper-empty">Log in to use practice trading. Your simulated account is saved to your FAAM account.</p>`;
+    ["pfEquity", "pfCash", "pfInvested", "pfOpenPl", "pfRealized"].forEach((id) => {
+      const el = $("#" + id); if (el) el.textContent = "—";
+    });
+    const ch = $("#pfChange"); if (ch) { ch.textContent = "Log in to start"; ch.className = "pf-change"; }
+    if (posWrap) posWrap.innerHTML = `<p class="pf-empty">Log in to use practice trading — your simulated account is saved to your FAAM account.</p>`;
     if (trWrap) trWrap.innerHTML = "";
     return;
   }
-  if ($("#paperEquity")) $("#paperEquity").textContent = fmt.money(d.equity);
-  if ($("#paperCash")) $("#paperCash").textContent = fmt.money(d.cash);
-  if ($("#paperInvested")) $("#paperInvested").textContent = fmt.money(d.invested);
-  const plEl = $("#paperPl");
-  if (plEl) {
-    const pl = d.totalPl || 0;
-    plEl.textContent = `${fmt.signedMoney(pl)} (${pl >= 0 ? "+" : "−"}${Math.abs(d.totalPlPct || 0).toFixed(2)}%)`;
-    plEl.className = pl > 0 ? "up" : pl < 0 ? "down" : "";
+
+  const set = (id, v) => { const el = $("#" + id); if (el) el.textContent = v; };
+  set("pfEquity", fmt.money(d.equity));
+  set("pfCash", fmt.money(d.cash));
+  set("pfInvested", fmt.money(d.invested));
+  set("pfRealized", fmt.signedMoney(d.realized || 0));
+
+  const openEl = $("#pfOpenPl");
+  if (openEl) {
+    const v = d.openPl || 0;
+    openEl.textContent = fmt.signedMoney(v);
+    openEl.className = v > 0 ? "up" : v < 0 ? "down" : "";
   }
+
+  const ch = $("#pfChange");
+  if (ch) {
+    const pl = d.totalPl || 0, pct = d.totalPlPct || 0;
+    const arrow = pl > 0 ? "▲" : pl < 0 ? "▼" : "•";
+    ch.textContent = `${arrow} ${fmt.signedMoney(pl)} (${pl >= 0 ? "+" : "−"}${Math.abs(pct).toFixed(2)}%) all time`;
+    ch.className = "pf-change " + (pl > 0 ? "up" : pl < 0 ? "down" : "");
+  }
+
+  renderPaperChart();
 
   if (posWrap) {
     const rows = d.positions || [];
+    set("pfHoldCount", rows.length ? `${rows.length} position${rows.length === 1 ? "" : "s"}` : "");
     posWrap.innerHTML = rows.length ? rows.map((p) => `
-      <div class="paper-pos">
-        <div class="pp-sym"><b>${escapeHtml(p.symbol)}</b><span>${p.shares} share${p.shares === 1 ? "" : "s"} · avg ${fmt.money(p.avg)}</span></div>
-        <div class="pp-val"><b>${fmt.money(p.value)}</b><span>${fmt.money(p.price)} now</span></div>
-        <div class="pp-pl ${p.pl > 0 ? "up" : p.pl < 0 ? "down" : ""}"><b>${fmt.signedMoney(p.pl)}</b><span>${p.plPct >= 0 ? "+" : "−"}${Math.abs(p.plPct).toFixed(2)}%</span></div>
-        <button type="button" class="pp-sell" data-sym="${escapeHtml(p.symbol)}" data-sh="${p.shares}">Sell</button>
-      </div>`).join("")
-      : `<p class="paper-empty">No positions yet. Buy a share above to start your practice portfolio.</p>`;
-    posWrap.querySelectorAll(".pp-sell").forEach((b) => b.addEventListener("click", () => {
+      <button type="button" class="pf-hold" data-sym="${escapeHtml(p.symbol)}" data-sh="${p.shares}">
+        <span class="pfh-left">
+          <b>${escapeHtml(p.symbol)}</b>
+          <span>${p.shares} share${p.shares === 1 ? "" : "s"} · avg ${fmt.money(p.avg)}</span>
+        </span>
+        <span class="pfh-spark ${p.pl >= 0 ? "up" : "down"}" aria-hidden="true"></span>
+        <span class="pfh-right">
+          <b>${fmt.money(p.value)}</b>
+          <span class="${p.pl > 0 ? "up" : p.pl < 0 ? "down" : ""}">${fmt.signedMoney(p.pl)} · ${p.plPct >= 0 ? "+" : "−"}${Math.abs(p.plPct).toFixed(2)}%</span>
+        </span>
+      </button>`).join("")
+      : `<p class="pf-empty">No holdings yet. Buy your first share with the ticket on the right.</p>`;
+    // Tapping a holding loads it into the ticket, Robinhood-style.
+    posWrap.querySelectorAll(".pf-hold").forEach((b) => b.addEventListener("click", () => {
       $("#paperSymbol").value = b.dataset.sym;
-      $("#paperShares").value = b.dataset.sh;
+      $("#paperShares").value = "1";
       setPaperSide("sell");
-      $("#paperSymbol").scrollIntoView({ block: "center", behavior: "smooth" });
+      updatePaperEstimate();
     }));
   }
 
   if (trWrap) {
     const ts = d.trades || [];
-    trWrap.innerHTML = ts.length ? ts.slice(0, 8).map((t) => `
-      <div class="paper-trade">
-        <span class="pt-side ${t.side}">${t.side === "buy" ? "Buy" : "Sell"}</span>
-        <span class="pt-main"><b>${escapeHtml(t.symbol)}</b> ${t.shares} @ ${fmt.money(t.price)}</span>
-        <span class="pt-amt">${fmt.money(t.amount)}</span>
+    trWrap.innerHTML = ts.length ? ts.slice(0, 10).map((t) => `
+      <div class="pf-trade">
+        <span class="pft-dot ${t.side}"></span>
+        <span class="pft-main"><b>${t.side === "buy" ? "Bought" : "Sold"} ${escapeHtml(t.symbol)}</b><span>${t.shares} @ ${fmt.money(t.price)}</span></span>
+        <span class="pft-amt">${t.side === "buy" ? "−" : "+"}${fmt.money(t.amount)}</span>
       </div>`).join("")
-      : `<p class="paper-empty">Your practice trades will appear here.</p>`;
+      : `<p class="pf-empty">No trades yet.</p>`;
   }
 }
 
 function updatePaperEstimate() {
   const est = $("#paperEst");
   if (!est) return;
+  const quote = $("#pfQuote");
   const sym = ($("#paperSymbol")?.value || "").trim().toUpperCase();
   const shares = parseInt($("#paperShares")?.value || "0", 10);
-  if (!sym || !shares || shares < 1) { est.textContent = "Enter a symbol and share count to see an estimate."; return; }
+  if (!sym || !shares || shares < 1) {
+    est.textContent = "—";
+    if (quote) quote.hidden = true;
+    return;
+  }
   clearTimeout(paperEstTimer);
-  est.textContent = "Checking price…";
+  est.textContent = "…";
   paperEstTimer = setTimeout(async () => {
     try {
       const q = await (await fetch(`/api/stock/${encodeURIComponent(sym)}`)).json();
-      if (q.error || !q.price) { est.textContent = `Couldn't price ${sym}.`; return; }
-      const total = q.price * shares;
-      const cash = paperState?.cash;
-      const after = paperSide === "buy" && cash != null ? ` · cash after: ${fmt.money(cash - total)}` : "";
-      est.textContent = `${shares} × ${fmt.money(q.price)} ≈ ${fmt.money(total)}${after}`;
-    } catch { est.textContent = "Couldn't check that price."; }
-  }, 350);
+      if (q.error || !q.price) {
+        est.textContent = "—";
+        if (quote) quote.hidden = true;
+        setPaperMsg(`Couldn't price ${sym}.`, true);
+        return;
+      }
+      setPaperMsg("");
+      if (quote) {
+        quote.hidden = false;
+        $("#pfQuoteSym").textContent = sym;
+        $("#pfQuotePx").textContent = fmt.money(q.price) + " / share";
+      }
+      est.textContent = fmt.money(q.price * shares);
+    } catch { est.textContent = "—"; }
+  }, 300);
 }
 
 async function placePaperTrade() {
@@ -3530,7 +4530,7 @@ async function placePaperTrade() {
   } catch {
     setPaperMsg("Couldn't reach the simulator.", true);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = paperSide === "buy" ? "Place practice trade" : "Sell shares"; }
+    if (btn) { btn.disabled = false; btn.textContent = paperSide === "buy" ? "Review & buy" : "Review & sell"; }
   }
 }
 
@@ -3539,6 +4539,8 @@ async function resetPaperAccount() {
   try {
     const d = await (await fetch("/api/paper/reset", { method: "POST" })).json();
     paperState = d;
+    paperHistory = [];                                    // chart starts over too
+    try { localStorage.removeItem(PAPER_HIST_KEY); } catch {}
     renderPaper();
     setPaperMsg("Practice account reset to $10,000.");
     toast("Practice account reset");
@@ -3668,11 +4670,43 @@ function wire() {
     runScreen(c.dataset.q);
   }));
 
-  // FAAM Learn (full screen)
+  // FAAM Learn (full screen, Titan-powered)
   $("#learnBtn")?.addEventListener("click", openLearn);
   $("#closeLearn")?.addEventListener("click", () => $("#learnDialog").close());
-  $("#learnFsCourse")?.addEventListener("click", () => { $("#learnDialog").close(); openCourse(); });
-  $("#learnFsPractice")?.addEventListener("click", () => { $("#learnDialog").close(); openPaper(); });
+  $("#obSkip")?.addEventListener("click", obAbort);
+  $("#learnStartDiag")?.addEventListener("click", learnStartDiagnostic);
+  $("#lqBack")?.addEventListener("click", () => { if (learnDiag.idx > 0) { learnDiag.idx--; renderLearnQuestion(); } });
+  $("#lqNext")?.addEventListener("click", learnQuizNext);
+  // Results → open the Titan-written course in the reader
+  $("#lrStart")?.addEventListener("click", () => openLearnCourse("personal"));
+  $("#lrLibrary")?.addEventListener("click", () => { renderLearnLibrary(); learnView("lvHome"); });
+  $("#lrReview")?.addEventListener("click", () => { renderLearnReview(); learnView("lvReview"); });
+  $("#lrBackToResults")?.addEventListener("click", () => learnView("lvResults"));
+  $("#lrRetake")?.addEventListener("click", learnStartDiagnostic);
+  // Catalog + course-page navigation
+  $("#lcBack")?.addEventListener("click", () => {
+    stopArticleTracking(); renderLearnLibrary(); learnView("lvHome");
+  });
+  // Jump to the first unread section of the article (or back to the top).
+  $("#lcStart")?.addEventListener("click", () => {
+    const s = (learnCourse_ || {}).progress || {};
+    const target = $$("#lcArticle .art-sec")[s.articleDone ? 0 : (s.next || 0)];
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  // Review
+  $("#rvStart")?.addEventListener("click", startLearnReview);
+  $("#rvNext")?.addEventListener("click", reviewNext);
+  $("#rvBack")?.addEventListener("click", () => {
+    if (learnReview.idx > 0) { learnReview.idx--; renderReviewQuestion(); }
+  });
+  $("#rvRetake")?.addEventListener("click", startLearnReview);
+  $("#rvBackCourses")?.addEventListener("click", () => {
+    stopArticleTracking(); renderLearnLibrary(); learnView("lvHome");
+  });
+  $("#libSearch")?.addEventListener("input", (e) => {
+    learnQuery = e.target.value || "";
+    renderLearnLibrary();
+  });
 
   // FAAM Pro
   $("#proBtn").addEventListener("click", openProDialog);
@@ -3785,9 +4819,12 @@ function wire() {
   $("#adDismiss")?.addEventListener("click", closeAd);
 
   // Practice trading
-  $("#openPaperBtn")?.addEventListener("click", openPaper);
-  $("#coursePractice")?.addEventListener("click", openPaper);
-  $("#closePaper")?.addEventListener("click", () => $("#paperDialog").close());
+  $("#closePaper")?.addEventListener("click", closePaper);
+  $("#paperDialog")?.addEventListener("close", stopPaperLive);
+  $$(".pf-quick button[data-sh]").forEach((b) => b.addEventListener("click", () => {
+    $("#paperShares").value = b.dataset.sh; updatePaperEstimate();
+  }));
+  $("#pfMax")?.addEventListener("click", paperMaxShares);
   $("#paperBuy")?.addEventListener("click", () => setPaperSide("buy"));
   $("#paperSell")?.addEventListener("click", () => setPaperSide("sell"));
   $("#paperPlace")?.addEventListener("click", placePaperTrade);

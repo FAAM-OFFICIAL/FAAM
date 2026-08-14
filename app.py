@@ -1455,14 +1455,33 @@ TITAN_SEED = [
 _TITAN_SEED_INDEX = [(e["q"], e["a"], _titan_vec(_titan_tokens(e["q"]))) for e in TITAN_SEED]
 
 
+# Serve-rate counters: how often Titan answered locally vs. needed the AI. Kept
+# on disk so the ratio survives restarts (this is the number that shows whether
+# the retrieval cache is actually displacing paid calls).
+TITAN_COUNTERS = DATA_DIR / "titan_counters.json"
+
+
+def _titan_bump(key: str) -> None:
+    with _TITAN_LOCK:
+        c = _load_json(TITAN_COUNTERS, {})
+        c[key] = int(c.get(key, 0)) + 1
+        _save_json(TITAN_COUNTERS, c)
+
+
 def titan_stats() -> dict:
     data = _load_json(TITAN_FILE, [])
+    c = _load_json(TITAN_COUNTERS, {})
+    local, ai = int(c.get("local", 0)), int(c.get("ai", 0))
+    total = local + ai
     return {
         "version": TITAN_VERSION,
         "learned": len(data),
         "seeded": len(TITAN_SEED),
         "knowledge": len(data) + len(TITAN_SEED),
         "recalls": sum(int(e.get("hits", 0)) for e in data),
+        "servedLocal": local,
+        "servedAi": ai,
+        "hitRate": round(local / total * 100.0, 1) if total else 0.0,
         "enabled": True,
     }
 
@@ -1476,17 +1495,26 @@ def titan_learn(question: str, answer: str) -> None:
     if not toks:
         return
     qv = _titan_vec(toks)
+    norm = _titan_norm(q)
     with _TITAN_LOCK:
         data = _load_json(TITAN_FILE, [])
         for e in data:                 # refresh a near-duplicate question in place
-            if _titan_cos(qv, _titan_vec(_titan_tokens(e.get("q", "")))) >= 0.9:
-                e["a"], e["ts"] = a, int(time.time())
+            if e.get("n") == norm or _titan_cos(qv, _titan_vec(_titan_tokens(e.get("q", "")))) >= 0.9:
+                e["a"], e["ts"], e["n"] = a, int(time.time()), norm
                 _save_json(TITAN_FILE, data)
                 return
-        data.append({"q": q, "a": a, "ts": int(time.time()), "hits": 0})
+        data.append({"q": q, "n": norm, "a": a, "ts": int(time.time()), "hits": 0})
         if len(data) > TITAN_MAX:
+            # Evict least-useful first (never recalled, oldest) instead of blindly
+            # dropping the front, so proven answers survive.
+            data.sort(key=lambda e: (int(e.get("hits", 0)), int(e.get("ts", 0))))
             data = data[-TITAN_MAX:]
         _save_json(TITAN_FILE, data)
+
+
+def _titan_norm(q: str) -> str:
+    """Canonical form of a question for exact-repeat lookup."""
+    return " ".join(_titan_tokens(q))
 
 
 def titan_recall(question: str) -> dict | None:
@@ -1496,6 +1524,24 @@ def titan_recall(question: str) -> dict | None:
     if not toks:
         return None
     qv = _titan_vec(toks)
+
+    # Fast path: the same question asked again. Skips the similarity scan
+    # entirely, so repeats are effectively free.
+    norm = _titan_norm(question)
+    data0 = _load_json(TITAN_FILE, [])
+    for e in data0:
+        if e.get("n") == norm and e.get("a"):
+            with _TITAN_LOCK:
+                d = _load_json(TITAN_FILE, [])
+                for x in d:
+                    if x.get("n") == norm:
+                        x["hits"] = int(x.get("hits", 0)) + 1
+                        break
+                _save_json(TITAN_FILE, d)
+            _titan_bump("local")
+            return {"answer": e["a"], "score": 1.0, "matched": e.get("q", question),
+                    "from": "cache"}
+
     best_q, best_a, best_s, from_learned = None, None, 0.0, False
     # 1) built-in knowledge (precomputed vectors)
     for q, a, v in _TITAN_SEED_INDEX:
@@ -1517,6 +1563,7 @@ def titan_recall(question: str) -> dict | None:
                         e["hits"] = int(e.get("hits", 0)) + 1
                         break
                 _save_json(TITAN_FILE, data2)
+        _titan_bump("local")
         return {"answer": best_a, "score": round(best_s, 3), "matched": best_q,
                 "from": "taught" if from_learned else "knowledge"}
     return None
@@ -1540,7 +1587,11 @@ def titan_generate(question: str) -> str:
         r = openai_chat([{"role": "user", "content": question}], system=TITAN_SYSTEM)
         if "error" in r:
             return ""
-        return (extract_text(r) or "").strip()
+        out = (extract_text(r) or "").strip()
+        if out:
+            _titan_bump("ai")
+            titan_learn(question, out)     # cache it so the repeat is free
+        return out
     except Exception:  # noqa: BLE001
         return ""
 
@@ -1566,7 +1617,1418 @@ def titan_feedback(question: str, answer: str, good: bool) -> None:
             _save_json(TITAN_FILE, kept)
 
 
-# ---------- Beginner stock course ---# ---------- Beginner stock course --------------------------------------------
+# ---------- FAAM Learn — the course library -----------------------------------
+# A catalog of short courses the way a learn-to-invest app works: pick a track,
+# work through bite-sized lessons, answer a check question at the end of each.
+# Every lesson is 2-4 minutes of reading. "c" is the correct option index and is
+# stripped before any of this reaches the browser.
+LEARN_CATEGORIES = [
+    {"id": "stocks", "name": "Stocks", "blurb": "Shares, orders, charts and value"},
+    {"id": "risk", "name": "Risk", "blurb": "Position sizing and staying in the game"},
+    {"id": "strategy", "name": "Strategy", "blurb": "How people actually invest and trade"},
+    {"id": "crypto", "name": "Crypto", "blurb": "Digital assets, wallets and the risks"},
+    {"id": "forex", "name": "Forex", "blurb": "Currencies, pairs and pips"},
+]
+
+
+def _L(t, b, q, o, c):
+    """One lesson: title, body, check question, four options, correct index."""
+    return {"t": t, "b": b, "q": q, "o": o, "c": c}
+
+
+LEARN_LIBRARY = [
+    # ── Stocks ──────────────────────────────────────────────────────────────
+    {"id": "stocks-101", "cat": "stocks", "level": "Beginner", "mins": 12,
+     "title": "Stock Market Basics",
+     "blurb": "What a share is, who trades them, and what actually moves a price.",
+     "lessons": [
+         _L("What a share really is",
+            "A share is a slice of ownership in a real business. Own one share of a company with a million shares and you own a millionth of it — its profits, its assets, and its problems. That is the whole idea, and everything else in investing is built on top of it.",
+            "Owning a share makes you…",
+            ["A lender to the company", "A part-owner of the company",
+             "An employee of the company", "A guaranteed earner"], 1),
+         _L("Why prices move",
+            "A stock's price is simply the last price someone agreed to pay. It moves when expectations change — earnings, news, interest rates, or plain sentiment. Price is a running vote on the future, not a measurement of what a company is worth today.",
+            "A stock's price at any moment reflects…",
+            ["The company's true value", "What the last buyer and seller agreed on",
+             "The CEO's salary", "Next year's profits"], 1),
+         _L("Who is on the other side",
+            "Every trade has two sides. When you buy because a stock looks cheap, someone else is selling because it looks expensive, or because they need the cash. Assuming you are obviously right and they are obviously wrong is how beginners lose money.",
+            "When you buy a stock, the seller…",
+            ["Agrees with you", "Has taken the opposite side of your view",
+             "Must be a beginner", "Is the company itself"], 1),
+         _L("Exchanges and market hours",
+            "Exchanges match buyers with sellers. US markets run 9:30am to 4:00pm Eastern on weekdays. Outside those hours, pre-market and after-hours trading exists but is thinner, which means prices jump around more and are easier to move.",
+            "Why is after-hours trading riskier?",
+            ["Fees are higher", "Fewer participants, so prices move more sharply",
+             "Orders are illegal", "Prices are frozen"], 1),
+         _L("Your first realistic expectation",
+            "Broad markets have historically returned mid-single digits to around 10% a year on average over long periods — with brutal losing years mixed in. Anyone promising steady double-digit monthly returns is selling something. Slow and boring is the normal path.",
+            "A promise of steady 20% monthly returns is…",
+            ["Normal for stocks", "A serious red flag",
+             "Guaranteed by diversification", "How index funds work"], 1),
+     ]},
+    {"id": "stocks-orders", "cat": "stocks", "level": "Beginner", "mins": 10,
+     "title": "Orders & Execution",
+     "blurb": "Market, limit, stop — and the hidden cost of the spread.",
+     "lessons": [
+         _L("Market orders",
+            "A market order says: fill me now, at whatever the going price is. It almost always executes, but you do not control the price you get. On a fast-moving or thinly traded stock, the fill can be noticeably worse than the number you saw on screen.",
+            "The trade-off of a market order is…",
+            ["Fast fill, no price control", "Price control, may not fill",
+             "It cannot be used to sell", "It always costs commission"], 0),
+         _L("Limit orders",
+            "A limit order says: fill me only at this price or better. You control the price but give up certainty — if the market never reaches your limit, nothing happens. For most beginners, limit orders are the safer default.",
+            "A limit order gives you…",
+            ["A guaranteed fill", "Control of price, but no guarantee of a fill",
+             "A lower commission", "Priority over all other orders"], 1),
+         _L("Stop orders",
+            "A stop order sits dormant until the stock hits your stop price, then turns into a live order. It does not lock in that price — in a fast drop it becomes an order to sell at whatever is available, which can be well below your stop.",
+            "Once triggered, a plain stop order…",
+            ["Guarantees your stop price", "Becomes an order filled at whatever is available",
+             "Cancels itself", "Freezes the stock price"], 1),
+         _L("The bid-ask spread",
+            "At any moment there is a highest price buyers will pay (the bid) and a lowest price sellers will accept (the ask). The gap is the spread, and crossing it is a real cost you pay on every round trip. Wide spreads quietly punish frequent trading.",
+            "The bid-ask spread is…",
+            ["A broker subscription fee", "The gap between the best buy and best sell price",
+             "A government tax", "The day's price range"], 1),
+         _L("Slippage and size",
+            "Your order is only as good as the liquidity behind it. Buying a large amount of a thinly traded stock walks the price up against you — that difference between the expected and actual fill is slippage. Trade size and liquidity always have to be considered together.",
+            "Slippage is worst when…",
+            ["The stock is heavily traded", "Your order is large relative to available volume",
+             "You use a limit order", "The market just opened last week"], 1),
+     ]},
+    {"id": "stocks-charts", "cat": "stocks", "level": "Beginner", "mins": 8,
+     "title": "Reading Charts & Quotes",
+     "blurb": "What a chart can honestly tell you — and what it cannot.",
+     "lessons": [
+         _L("Anatomy of a quote",
+            "A quote shows the last traded price, the change since the previous close, and usually the day's range and volume. It is a snapshot of activity, not a verdict on quality. A rising price does not mean a good business.",
+            "A rising stock price proves…",
+            ["The business is healthy", "Only that buyers have been paying more",
+             "A dividend is coming", "The company beat earnings"], 1),
+         _L("Timeframes change the story",
+            "The same stock can look like a disaster on a one-month chart and a triumph on a five-year one. Before drawing a conclusion, check what period you are looking at — a huge share of bad investing decisions come from reading one timeframe and forgetting the others.",
+            "A stock looks terrible on a 1-month chart. You should…",
+            ["Sell right away", "Also check longer timeframes for context",
+             "Buy more immediately", "Ignore the chart entirely"], 1),
+         _L("Volume as confirmation",
+            "Volume is how many shares changed hands. A big move on heavy volume means many participants agreed; the same move on thin volume can be a handful of trades. Volume adds confidence to a price move — it does not predict the next one.",
+            "A large price move on very low volume suggests…",
+            ["Strong broad agreement", "Few participants were actually involved",
+             "The move will continue", "A dividend was paid"], 1),
+         _L("The 52-week range",
+            "The 52-week high and low mark the extremes of the past year. They are useful context for where price sits now, but 'near the low' does not mean cheap and 'near the high' does not mean expensive. Both can keep going.",
+            "A stock near its 52-week low is…",
+            ["Automatically a bargain", "Not automatically cheap — it may keep falling",
+             "Guaranteed to bounce", "Always a better buy"], 1),
+     ]},
+    {"id": "stocks-value", "cat": "stocks", "level": "Intermediate", "mins": 11,
+     "title": "Valuation Basics",
+     "blurb": "P/E, market cap, EPS — what the numbers mean and where they mislead.",
+     "lessons": [
+         _L("Market capitalisation",
+            "Market cap is share price times shares outstanding — the market's price tag on the whole company. It is why a $5 stock is not 'cheaper' than a $500 one: the share price alone tells you nothing without knowing how many shares exist.",
+            "Market capitalisation is…",
+            ["Share price × shares outstanding", "Revenue minus debt",
+             "Price ÷ earnings", "Total assets"], 0),
+         _L("Earnings per share",
+            "EPS is profit divided across each outstanding share. It lets you compare profitability between companies of very different sizes, and it is the denominator in the most quoted ratio in investing.",
+            "EPS measures…",
+            ["Profit allocated to each share", "The dividend per share",
+             "Revenue per employee", "Next year's target price"], 0),
+         _L("The P/E ratio",
+            "Price divided by earnings per share tells you how many years of current profit you are paying for. A P/E of 25 means paying 25 times annual earnings. High is not automatically bad — fast growers often deserve it.",
+            "A P/E of 25 means you're paying…",
+            ["25 dollars per share", "About 25 times annual earnings",
+             "A 25% dividend", "25% above book value"], 1),
+         _L("Why ratios mislead alone",
+            "A low P/E can mean a bargain or a business in decline. A high one can mean hype or genuine growth. Ratios are the start of a question, never the end of one — compare within an industry and read why the number looks the way it does.",
+            "Two companies have very different P/Es. Alone, that tells you…",
+            ["The lower one is the better buy", "The higher one is overpriced",
+             "Little — growth, risk and industry all matter", "Nothing can be compared"], 2),
+         _L("Growth changes everything",
+            "A company earning $1 today growing 30% a year is a very different proposition from one earning $1 and shrinking, even at an identical price. Valuation is always a judgement about the future, which is why reasonable people disagree.",
+            "Valuation is fundamentally a judgement about…",
+            ["The past year", "The future", "The dividend", "The share count"], 1),
+     ]},
+    {"id": "stocks-income", "cat": "stocks", "level": "Intermediate", "mins": 8,
+     "title": "Dividends & Total Return",
+     "blurb": "Getting paid to hold, and counting your return properly.",
+     "lessons": [
+         _L("What a dividend is",
+            "A dividend is a share of profits paid out to shareholders, usually quarterly. It is a choice, not an obligation — a company can raise it, cut it, or stop it entirely, and a cut often says something important about the business.",
+            "A dividend is…",
+            ["A guaranteed payment", "A share of profits the company chooses to pay out",
+             "A fee you pay", "Interest on a loan"], 1),
+         _L("Yield and its trap",
+            "Dividend yield is annual dividend divided by price. Because price is the denominator, a collapsing stock shows a soaring yield. An unusually high yield is often a warning that the market expects a cut, not a free lunch.",
+            "A stock's dividend yield suddenly looks very high. Often this means…",
+            ["Management got generous", "The price has fallen and a cut may be coming",
+             "Guaranteed income", "The company is undervalued"], 1),
+         _L("Total return",
+            "Your real return is price change plus dividends received. A flat stock that paid 4% did not make you nothing. Judging investments on price alone systematically undercounts what income-paying holdings actually did for you.",
+            "A stock is flat for a year but paid a 3% dividend. Your total return is roughly…",
+            ["0%", "About 3%", "Negative 3%", "Unknowable"], 1),
+         _L("Reinvesting and compounding",
+            "Reinvested dividends buy more shares, which pay more dividends. Over decades this compounding is responsible for a large share of the total returns of broad stock markets — far more than most people expect from such a boring mechanism.",
+            "Reinvesting dividends over long periods…",
+            ["Has little effect", "Compounds and can drive a large share of total return",
+             "Guarantees profit", "Reduces your shares"], 1),
+     ]},
+    # ── Risk ────────────────────────────────────────────────────────────────
+    {"id": "risk-101", "cat": "risk", "level": "Beginner", "mins": 11,
+     "title": "Risk & Position Sizing",
+     "blurb": "The skill that decides whether you're still investing in five years.",
+     "lessons": [
+         _L("Risk is not just volatility",
+            "Volatility is how much a price swings. Risk is the chance of a permanent loss, or of being forced to sell at the worst moment. A calm-looking asset can carry enormous risk, and a jumpy one can be fine if you can hold it.",
+            "Risk is best described as…",
+            ["Daily price swings only", "The chance of permanent loss or forced selling",
+             "The number of shares held", "A fund's expense ratio"], 1),
+         _L("Position sizing",
+            "How much you put into one idea matters more than the idea itself. A brilliant thesis at 80% of your portfolio can end you; a mediocre one at 3% cannot. Size positions so that being wrong is survivable and boring.",
+            "The main job of position sizing is to…",
+            ["Maximise every gain", "Make being wrong survivable",
+             "Reduce commissions", "Beat the index"], 1),
+         _L("Diversification and its limits",
+            "Spreading across holdings reduces how much any single one can hurt you. It does not protect against the whole market falling, and ten stocks in one industry are far less diversified than they look, because they move together on the same news.",
+            "Ten software stocks are poorly diversified because…",
+            ["Ten is always too few", "They tend to move together on the same news",
+             "Tech cannot pay dividends", "Brokers cap the sector"], 1),
+         _L("Time horizon drives everything",
+            "Money needed in six months does not belong in the market — a bad quarter would force you to sell at the bottom. Money you will not touch for a decade can ride out declines. Match the asset to when you need the cash.",
+            "Money you need in six months is best kept…",
+            ["In a volatile growth stock", "Out of the market, in cash or savings",
+             "In crypto", "Spread across ten stocks"], 1),
+         _L("Leverage magnifies everything",
+            "Borrowing to invest multiplies gains and losses alike, and adds the risk of a forced liquidation at the worst possible moment. Leverage does not make a good strategy better — it makes any strategy less forgiving.",
+            "Investing with borrowed money…",
+            ["Removes risk", "Magnifies both gains and losses and can force liquidation",
+             "Only magnifies gains", "Caps your losses"], 1),
+     ]},
+    {"id": "risk-mind", "cat": "risk", "level": "Intermediate", "mins": 9,
+     "title": "Trading Psychology",
+     "blurb": "The biases that cost more money than any bad chart ever did.",
+     "lessons": [
+         _L("Loss aversion",
+            "Losses hurt roughly twice as much as equivalent gains feel good. That asymmetry pushes people to hold losers hoping to break even, and to sell winners early to lock in a small win — precisely backwards from a sound process.",
+            "Loss aversion typically causes people to…",
+            ["Cut losses quickly", "Hold losers too long and sell winners too early",
+             "Ignore gains", "Trade less"], 1),
+         _L("Confirmation bias",
+            "Once you own something, you start reading only the news that agrees with you. The strongest antidote is to deliberately seek the best argument against your position and see whether it changes anything.",
+            "The best antidote to confirmation bias is to…",
+            ["Read more bullish takes", "Actively seek the strongest opposing argument",
+             "Stop reading news", "Buy more"], 1),
+         _L("Recency and hype",
+            "Whatever just went up feels safest, which is exactly when it is most expensive. Social media amplifies this — by the time something is everywhere, the easy part of the move is usually behind it.",
+            "A stock is trending everywhere with promises of quick gains. The right first move is…",
+            ["Buy before it runs", "Research the business and the risk yourself",
+             "Borrow to buy more", "Copy the biggest position you see"], 1),
+         _L("A written plan",
+            "Deciding in advance what you will buy, how much, and what would make you sell converts panic moments into checklist moments. The plan does not need to be clever — it needs to exist before you need it.",
+            "The main value of a written plan is that it…",
+            ["Guarantees profit", "Turns panic decisions into pre-made ones",
+             "Impresses your broker", "Reduces taxes"], 1),
+     ]},
+    # ── Strategy ────────────────────────────────────────────────────────────
+    {"id": "strat-long", "cat": "strategy", "level": "Beginner", "mins": 10,
+     "title": "Long-Term Investing",
+     "blurb": "The boring approach that beats most active traders.",
+     "lessons": [
+         _L("Index funds and ETFs",
+            "An index measures a basket of securities; a fund can try to track it. Buying a broad index fund means owning a slice of hundreds of companies at once, which removes the need to pick winners — and removes the chance of picking losers.",
+            "A broad index fund lets you…",
+            ["Guarantee returns", "Own many companies at once without picking",
+             "Avoid all risk", "Beat the market by design"], 1),
+         _L("Costs compound too",
+            "A 1% annual fee sounds trivial and is not. Over decades it quietly removes a large share of your ending balance, because the money taken out never compounds for you. Low-cost funds win largely by not losing this way.",
+            "Small yearly fees matter over decades because…",
+            ["They're charged twice", "They compound, quietly shrinking your ending balance",
+             "They raise your tax bracket", "They come out of dividends only"], 1),
+         _L("Dollar-cost averaging",
+            "Investing a fixed amount on a schedule buys more shares when prices are low and fewer when high, and removes the need to time anything. It does not guarantee a profit — it guarantees you keep participating.",
+            "Dollar-cost averaging means…",
+            ["Buying only after drops", "Investing equal amounts on a schedule",
+             "Selling monthly", "Guaranteeing a lower price"], 1),
+         _L("Doing nothing is a strategy",
+            "The most common way long-term investors hurt themselves is reacting. Checking daily invites tinkering; tinkering invites selling into declines. A plan that requires you to act rarely is a feature, not laziness.",
+            "For a long-term investor, frequent portfolio checking tends to…",
+            ["Improve returns", "Encourage harmful tinkering",
+             "Lower fees", "Increase dividends"], 1),
+         _L("Emergency fund first",
+            "Before investing, hold cash for several months of expenses. Without it, the first unexpected bill forces you to sell investments at whatever price the market offers that day — usually a bad one.",
+            "An emergency fund exists so that…",
+            ["You can trade more", "A surprise expense doesn't force you to sell investments",
+             "You earn higher interest", "You qualify for margin"], 1),
+     ]},
+    {"id": "strat-tech", "cat": "strategy", "level": "Intermediate", "mins": 10,
+     "title": "Technical Analysis",
+     "blurb": "Trends, support and moving averages — with honest caveats.",
+     "lessons": [
+         _L("What technical analysis claims",
+            "Technical analysis studies price and volume patterns rather than the underlying business. Its premise is that price action reflects everything participants know. It is a lens, not a law, and evidence for its predictive power is mixed.",
+            "Technical analysis focuses on…",
+            ["Company earnings reports", "Price and volume behaviour",
+             "Interest rate policy", "Management interviews"], 1),
+         _L("Trends",
+            "A rising series of higher highs and higher lows is an uptrend; the reverse is a downtrend. Trends persist until they do not, and identifying one on a chart is far easier after the fact than in the moment.",
+            "An uptrend is characterised by…",
+            ["Higher highs and higher lows", "Flat prices",
+             "Falling volume only", "A high dividend"], 0),
+         _L("Support and resistance",
+            "Support is a price area where buying has repeatedly appeared; resistance is where selling has. They are zones of past behaviour, not physical barriers — treating them as guarantees is how people get run over.",
+            "Support and resistance levels are…",
+            ["Guaranteed price floors and ceilings", "Zones where buyers or sellers have appeared before",
+             "Set by exchanges", "Regulatory limits"], 1),
+         _L("Moving averages",
+            "A moving average smooths price into a trend line — a 50-day average is the mean of the last 50 closes. They help you see direction through noise, but they lag by construction: they describe what already happened.",
+            "A moving average is inherently…",
+            ["Predictive", "Lagging — it describes past prices",
+             "Unaffected by price", "A measure of volume"], 1),
+         _L("The honest caveat",
+            "Patterns are easy to find in random data, and the human brain is exceptional at seeing them where none exist. Use technicals to manage entries and risk if they help you — not as a substitute for understanding what you own.",
+            "The main danger of pattern-based trading is…",
+            ["Fees", "Seeing patterns in what is actually noise",
+             "Slow execution", "Regulatory limits"], 1),
+     ]},
+    {"id": "strat-day", "cat": "strategy", "level": "Advanced", "mins": 10,
+     "title": "Day Trading Foundations",
+     "blurb": "How it really works, including the odds nobody advertises.",
+     "lessons": [
+         _L("What day trading is",
+            "Day trading means opening and closing positions within the same session, aiming to profit from short-term moves. It is a full-time skill competing against professionals and automated systems, not a casual side activity.",
+            "Day trading means…",
+            ["Holding for years", "Opening and closing positions within the same day",
+             "Buying only index funds", "Investing monthly"], 1),
+         _L("The odds",
+            "Studies of retail day traders consistently find that the large majority lose money over time, and only a small minority are persistently profitable. Anyone teaching this who does not lead with that fact is not being straight with you.",
+            "Research on retail day traders generally finds that…",
+            ["Most are profitable", "A large majority lose money over time",
+             "Results are guaranteed", "Everyone breaks even"], 1),
+         _L("Costs eat the edge",
+            "Trading twenty times a day means paying the spread twenty times, plus any commissions and short-term tax treatment. A strategy needs a real edge just to cover its own friction before it earns anything.",
+            "Frequent trading is hard partly because…",
+            ["Spreads and costs are paid on every trade", "Brokers ban it",
+             "Prices stop moving", "Dividends are lost"], 0),
+         _L("Risk rules come first",
+            "Serious short-term traders define maximum loss per trade and per day before entering anything, and stop when they hit it. The rule exists precisely because you cannot be trusted to decide mid-drawdown.",
+            "Daily loss limits are set in advance because…",
+            ["Brokers require it", "You can't judge clearly mid-loss",
+             "It increases returns", "It reduces spreads"], 1),
+         _L("Practise before risking",
+            "Simulated trading lets you test whether a process survives contact with real prices, without funding the lesson. FAAM's practice account exists for exactly this — treat a losing simulated month as valuable information.",
+            "The point of a trading simulator is to…",
+            ["Guarantee real profits", "Test a process before risking real money",
+             "Replace research", "Avoid learning"], 1),
+     ]},
+    # ── Crypto ──────────────────────────────────────────────────────────────
+    {"id": "crypto-101", "cat": "crypto", "level": "Beginner", "mins": 10,
+     "title": "Crypto Basics",
+     "blurb": "Blockchains, coins and why volatility is the default.",
+     "lessons": [
+         _L("What a blockchain is",
+            "A blockchain is a shared ledger maintained by many computers at once, where new entries are added in batches and old ones are impractical to alter. The point is record-keeping without a single trusted middleman.",
+            "A blockchain is essentially…",
+            ["A company", "A shared ledger maintained by many computers",
+             "A type of bank account", "A government currency"], 1),
+         _L("Coins versus tokens",
+            "A coin is native to its own blockchain, like Bitcoin or Ether. A token is issued on top of an existing chain and can be created by nearly anyone — which is why most tokens are worth nothing and a few are not.",
+            "A token differs from a coin in that it…",
+            ["Runs its own blockchain", "Is issued on top of an existing blockchain",
+             "Is government-backed", "Cannot be traded"], 1),
+         _L("Why crypto is so volatile",
+            "Crypto has no earnings, no dividends and no cash flows to anchor a price. Value rests almost entirely on what the next buyer will pay, and markets trade 24/7 worldwide — so moves that would be extraordinary in stocks are ordinary here.",
+            "Crypto prices swing so much largely because…",
+            ["Exchanges set them", "There are no earnings or cash flows to anchor value",
+             "Trading hours are short", "Dividends fluctuate"], 1),
+         _L("Position sizing matters more here",
+            "Everything from the risk course applies with the volume turned up. Sizing a crypto position so a total loss would be survivable is not pessimism — assets in this class have gone to zero many times.",
+            "Because of crypto's volatility, position sizes should be…",
+            ["Larger than for stocks", "Small enough that a total loss is survivable",
+             "Always 50% of the portfolio", "Set by the exchange"], 1),
+         _L("Regulation and taxes vary",
+            "Crypto's legal and tax treatment differs sharply by country and keeps changing. Trades are often taxable events even without converting back to cash. Check your own jurisdiction rather than assuming what applies elsewhere.",
+            "Crypto tax treatment…",
+            ["Is identical worldwide", "Varies by country and changes over time",
+             "Never applies", "Only applies to mining"], 1),
+     ]},
+    {"id": "crypto-safe", "cat": "crypto", "level": "Intermediate", "mins": 8,
+     "title": "Crypto Risks & Security",
+     "blurb": "Custody, scams and the failure modes that wipe people out.",
+     "lessons": [
+         _L("Keys and custody",
+            "Whoever holds the private keys controls the coins. Leaving assets on an exchange means trusting that company completely — a lesson relearned every time one collapses. Self-custody removes that risk and adds the risk of losing your own keys.",
+            "Leaving crypto on an exchange means…",
+            ["It is government insured", "You are trusting that company entirely",
+             "You hold the private keys", "It cannot be lost"], 1),
+         _L("Irreversibility",
+            "Crypto transactions cannot be reversed. There is no chargeback, no fraud department, and no support line that can undo a transfer to the wrong address. Verify twice; there is no second chance.",
+            "A crypto transfer sent to the wrong address…",
+            ["Can be reversed by support", "Is generally unrecoverable",
+             "Is refunded automatically", "Bounces back"], 1),
+         _L("Common scams",
+            "Fake giveaways, romance-investment schemes, cloned websites and 'guaranteed yield' platforms all follow one pattern: urgency plus a promise. Anyone rushing you toward a transfer is running a script, however credible they sound.",
+            "The common thread in crypto scams is…",
+            ["Complex technology", "Urgency combined with a promised return",
+             "Low fees", "Government backing"], 1),
+         _L("Rug pulls and liquidity",
+            "A new token can look like it is trading fine while almost no real liquidity exists. When the creators sell, the price collapses to nothing. Being able to see a price is not the same as being able to sell at it.",
+            "A visible price on a thin token means…",
+            ["You can always sell there", "Not necessarily that you can sell at that price",
+             "The project is audited", "Liquidity is guaranteed"], 1),
+     ]},
+    # ── Forex ───────────────────────────────────────────────────────────────
+    {"id": "forex-101", "cat": "forex", "level": "Beginner", "mins": 9,
+     "title": "Forex Fundamentals",
+     "blurb": "Currency pairs, pips, and what actually moves exchange rates.",
+     "lessons": [
+         _L("Currencies trade in pairs",
+            "You never buy a currency alone — you buy one against another. EUR/USD rising means the euro is strengthening relative to the dollar. Every forex position is simultaneously a bet for one currency and against another.",
+            "Buying EUR/USD is a bet that…",
+            ["The euro strengthens against the dollar", "Both currencies rise",
+             "The dollar strengthens", "Interest rates fall"], 0),
+         _L("Base and quote",
+            "In EUR/USD, the euro is the base and the dollar is the quote. The number tells you how many dollars one euro costs. Reading the pair the wrong way round is the most common beginner error in this market.",
+            "In EUR/USD = 1.10, the 1.10 means…",
+            ["One euro costs 1.10 dollars", "One dollar costs 1.10 euros",
+             "The pair rose 1.10%", "There are 1.10 pips"], 0),
+         _L("Pips",
+            "A pip is the standard smallest increment for most pairs — typically the fourth decimal place. Because moves are small, forex is usually traded with leverage, which is exactly what makes it dangerous for beginners.",
+            "Forex is commonly traded with leverage because…",
+            ["Regulators require it", "Individual price moves are very small",
+             "It removes risk", "Pairs are illiquid"], 1),
+         _L("What moves exchange rates",
+            "Interest rate differences, inflation, growth and political stability drive currencies over time. Central bank decisions are the single biggest scheduled mover — which is why rates whip around on announcement days.",
+            "The biggest scheduled driver of currency moves is usually…",
+            ["Company earnings", "Central bank rate decisions",
+             "Dividend dates", "Stock splits"], 1),
+         _L("Leverage cuts both ways",
+            "At 50:1 leverage, a 2% move against you erases your entire stake. Retail forex loss rates are high for precisely this reason. Any broker advertising huge leverage as a benefit is describing your risk, not your opportunity.",
+            "At 50:1 leverage, a 2% adverse move…",
+            ["Costs 2% of your stake", "Can wipe out your entire stake",
+             "Is automatically hedged", "Triggers a refund"], 1),
+     ]},
+    {"id": "forex-pairs", "cat": "forex", "level": "Intermediate", "mins": 7,
+     "title": "Pairs, Sessions & Spreads",
+     "blurb": "Majors versus exotics, and why timing changes your costs.",
+     "lessons": [
+         _L("Majors, minors and exotics",
+            "Majors pair the dollar with other large currencies and carry the tightest spreads. Exotics involve smaller economies, move violently and cost far more to trade. Beginners belong in majors, if anywhere.",
+            "Exotic currency pairs typically have…",
+            ["The tightest spreads", "Wider spreads and sharper moves",
+             "No volatility", "Guaranteed liquidity"], 1),
+         _L("Trading sessions",
+            "Forex runs 24 hours on weekdays, rotating through Asian, European and US sessions. Liquidity peaks when London and New York overlap, and thins overnight — the same pair costs more to trade at the wrong hour.",
+            "Liquidity in forex is generally highest…",
+            ["Overnight in Asia", "When the London and New York sessions overlap",
+             "On weekends", "At month end only"], 1),
+         _L("Spreads are the real cost",
+            "Most retail forex brokers earn from the spread rather than a visible commission. That makes the cost easy to overlook and easy to underestimate — especially for strategies that trade many times a day.",
+            "Most retail forex brokers are primarily paid through…",
+            ["A monthly fee", "The spread", "Government subsidy", "Deposit interest"], 1),
+         _L("Rollover and holding costs",
+            "Holding a position overnight incurs a financing adjustment based on the interest rate difference between the two currencies. It can be a small credit or a persistent drag — either way it compounds over time.",
+            "Holding a forex position overnight involves…",
+            ["No cost ever", "A financing adjustment from the rate difference",
+             "A mandatory close", "Double the spread"], 1),
+     ]},
+]
+
+# ---------- End-of-unit reviews ----------------------------------------------
+# Each course is one interactive article; its sections carry a section test, and
+# finishing the article unlocks this 5-question review — the unit test. Kept in
+# its own table so the article content above stays readable.
+REVIEW_LEN = 5
+REVIEW_PASS = 4                     # 4 of 5 to pass and earn the certificate
+
+
+def _R(q, o, c):
+    return {"q": q, "o": o, "c": c}
+
+
+LEARN_REVIEWS = {
+    "stocks-101": [
+        _R("A share of common stock is best described as…",
+           ["A loan to the company", "Partial ownership of the company",
+            "A guaranteed dividend", "An insured deposit"], 1),
+        _R("What does a stock's current price actually represent?",
+           ["The company's true worth", "What the last buyer and seller agreed on",
+            "Next year's earnings", "The company's total assets"], 1),
+        _R("Why is after-hours trading generally riskier?",
+           ["Trading is illegal then", "Fewer participants, so prices move more sharply",
+            "Prices are frozen", "Fees triple"], 1),
+        _R("Someone promises steady 20% returns every month. This is…",
+           ["Typical of index funds", "A serious red flag",
+            "Guaranteed by diversification", "Normal for blue chips"], 1),
+        _R("When you buy a stock, the person selling to you…",
+           ["Must be mistaken", "Has taken the opposite side of your view",
+            "Is always the company", "Is required to be a professional"], 1),
+    ],
+    "stocks-orders": [
+        _R("You need to exit a position immediately and price matters less. Which order fits?",
+           ["Market order", "Limit order", "Stop order", "No order type works"], 0),
+        _R("A limit order's main drawback is…",
+           ["It costs more", "It may never fill", "It cannot be cancelled",
+            "It only works at the open"], 1),
+        _R("Once triggered, a plain stop order…",
+           ["Fills exactly at the stop price", "Becomes an order filled at whatever is available",
+            "Converts to a limit order automatically", "Cancels the position"], 1),
+        _R("Crossing the bid-ask spread is…",
+           ["Free", "A real cost paid on every round trip",
+            "Only charged to institutions", "A tax"], 1),
+        _R("Slippage is worst when…",
+           ["Volume is heavy", "Your order is large relative to available volume",
+            "You use a limit order", "The market is closed"], 1),
+    ],
+    "stocks-charts": [
+        _R("A rising price on its own proves…",
+           ["The business is healthy", "Only that buyers have been paying more",
+            "A dividend is coming", "Earnings beat expectations"], 1),
+        _R("Before judging a stock from a one-month chart you should…",
+           ["Sell immediately", "Check longer timeframes for context",
+            "Ignore price entirely", "Buy the dip"], 1),
+        _R("A large price move on very low volume suggests…",
+           ["Broad agreement", "Few participants were actually involved",
+            "The move will continue", "An index rebalance"], 1),
+        _R("A stock trading near its 52-week low is…",
+           ["Automatically cheap", "Not automatically cheap — it can keep falling",
+            "Guaranteed to bounce", "Always a better buy than one at its high"], 1),
+        _R("What can a chart tell you with certainty?",
+           ["Tomorrow's price", "How price moved over the period shown",
+            "Fair value", "That a trend continues"], 1),
+    ],
+    "stocks-value": [
+        _R("A $5 stock is cheaper than a $500 stock. True?",
+           ["Yes, always", "No — price alone says nothing without share count",
+            "Yes, if it pays a dividend", "Only for large caps"], 1),
+        _R("Market capitalisation equals…",
+           ["Share price × shares outstanding", "Revenue minus debt",
+            "Price ÷ earnings", "Assets minus liabilities"], 0),
+        _R("A P/E of 25 means you are paying roughly…",
+           ["$25 per share", "25 times annual earnings", "A 25% yield",
+            "25% over book value"], 1),
+        _R("EPS measures…",
+           ["Profit allocated to each share", "The dividend per share",
+            "Revenue per share", "Cash per share"], 0),
+        _R("Comparing two companies' P/E ratios alone tells you…",
+           ["Which is the better buy", "Which is overpriced",
+            "Little — growth, risk and industry all matter", "Which pays more dividends"], 2),
+    ],
+    "stocks-income": [
+        _R("A dividend is…",
+           ["Guaranteed by law", "A share of profits the company chooses to pay",
+            "Interest on a bond", "A brokerage fee"], 1),
+        _R("A stock's dividend yield suddenly spikes. The most likely reason is…",
+           ["Management became generous", "The price fell and a cut may be coming",
+            "The company issued shares", "Rates fell"], 1),
+        _R("Your total return is…",
+           ["Price change only", "Price change plus dividends received",
+            "Dividends only", "Price change minus taxes"], 1),
+        _R("Reinvesting dividends over decades…",
+           ["Has little effect", "Compounds and can drive much of total return",
+            "Reduces your share count", "Guarantees a profit"], 1),
+        _R("A company can reduce or stop its dividend.",
+           ["False — it's a legal obligation", "True",
+            "Only in a recession", "Only with shareholder approval"], 1),
+    ],
+    "risk-101": [
+        _R("Risk is best described as…",
+           ["Daily price swings only", "The chance of permanent loss or forced selling",
+            "The number of holdings", "A fund's fee"], 1),
+        _R("The main job of position sizing is to…",
+           ["Maximise every gain", "Make being wrong survivable",
+            "Reduce commissions", "Beat the index"], 1),
+        _R("Ten stocks all in one industry are…",
+           ["Well diversified", "Less diversified than they look — they move together",
+            "Immune to sector risk", "Always safer than an index fund"], 1),
+        _R("Money you need in six months belongs…",
+           ["In a growth stock", "Out of the market, in cash or savings",
+            "In crypto", "In options"], 1),
+        _R("Investing with borrowed money…",
+           ["Removes risk", "Magnifies gains and losses and can force liquidation",
+            "Only magnifies gains", "Caps losses at your deposit"], 1),
+    ],
+    "risk-mind": [
+        _R("Loss aversion typically causes investors to…",
+           ["Cut losses fast", "Hold losers too long and sell winners too early",
+            "Trade less often", "Diversify more"], 1),
+        _R("The best antidote to confirmation bias is to…",
+           ["Read more bullish coverage", "Seek the strongest opposing argument",
+            "Stop reading news", "Average down"], 1),
+        _R("By the time an investment is trending everywhere…",
+           ["It is safest", "The easy part of the move is usually behind it",
+            "It is guaranteed to rise", "Institutions are just buying"], 1),
+        _R("A written plan mainly helps by…",
+           ["Guaranteeing returns", "Turning panic decisions into pre-made ones",
+            "Lowering fees", "Improving execution speed"], 1),
+        _R("Losses feel roughly how strong compared with equivalent gains?",
+           ["The same", "About twice as strong", "Half as strong", "Ten times"], 1),
+    ],
+    "strat-long": [
+        _R("A broad index fund lets you…",
+           ["Guarantee a return", "Own many companies without picking winners",
+            "Avoid all risk", "Beat the market by design"], 1),
+        _R("Small annual fees matter over decades because…",
+           ["They are charged twice", "They compound, shrinking your ending balance",
+            "They raise your tax rate", "They come from dividends only"], 1),
+        _R("Dollar-cost averaging means…",
+           ["Buying only after drops", "Investing equal amounts on a schedule",
+            "Selling monthly", "Guaranteeing a lower average price"], 1),
+        _R("For a long-term investor, checking the portfolio daily tends to…",
+           ["Improve returns", "Encourage harmful tinkering", "Lower fees",
+            "Increase dividends"], 1),
+        _R("An emergency fund exists so that…",
+           ["You can use margin", "A surprise bill doesn't force you to sell investments",
+            "You earn more interest", "You can day trade"], 1),
+    ],
+    "strat-tech": [
+        _R("Technical analysis studies…",
+           ["Earnings reports", "Price and volume behaviour",
+            "Management quality", "Interest rate policy"], 1),
+        _R("An uptrend is characterised by…",
+           ["Higher highs and higher lows", "Flat prices",
+            "Falling volume", "A rising dividend"], 0),
+        _R("Support and resistance levels are…",
+           ["Guaranteed floors and ceilings", "Zones where buyers or sellers appeared before",
+            "Set by the exchange", "Regulatory limits"], 1),
+        _R("A moving average is inherently…",
+           ["Predictive", "Lagging — it describes past prices",
+            "Independent of price", "A volume measure"], 1),
+        _R("The main danger of pattern trading is…",
+           ["High fees", "Seeing patterns in what is actually noise",
+            "Slow fills", "Regulatory risk"], 1),
+    ],
+    "strat-day": [
+        _R("Day trading means…",
+           ["Holding for years", "Opening and closing positions within the same day",
+            "Buying index funds monthly", "Investing on margin only"], 1),
+        _R("Research on retail day traders generally finds…",
+           ["Most are profitable", "A large majority lose money over time",
+            "Results are guaranteed", "Everyone breaks even"], 1),
+        _R("Frequent trading is hard partly because…",
+           ["Spreads and costs are paid on every trade", "Brokers forbid it",
+            "Prices stop moving", "Dividends are forfeited"], 0),
+        _R("Daily loss limits are set in advance because…",
+           ["Brokers require them", "You can't judge clearly mid-drawdown",
+            "They raise returns", "They cut spreads"], 1),
+        _R("A trading simulator is for…",
+           ["Guaranteeing real profits", "Testing a process before risking real money",
+            "Replacing research", "Avoiding fees on real trades"], 1),
+    ],
+    "crypto-101": [
+        _R("A blockchain is…",
+           ["A company", "A shared ledger maintained by many computers",
+            "A bank account type", "A government currency"], 1),
+        _R("A token differs from a coin in that it…",
+           ["Runs its own blockchain", "Is issued on top of an existing blockchain",
+            "Is government-backed", "Cannot be traded"], 1),
+        _R("Crypto is highly volatile largely because…",
+           ["Exchanges set prices", "There are no earnings or cash flows to anchor value",
+            "Trading hours are short", "Dividends vary"], 1),
+        _R("Crypto position sizes should be…",
+           ["Larger than stock positions", "Small enough that a total loss is survivable",
+            "Always half the portfolio", "Set by the exchange"], 1),
+        _R("Crypto tax treatment…",
+           ["Is the same worldwide", "Varies by country and changes over time",
+            "Never applies", "Applies only to mining"], 1),
+    ],
+    "crypto-safe": [
+        _R("Leaving crypto on an exchange means…",
+           ["It is insured", "You are trusting that company entirely",
+            "You hold the keys", "It cannot be lost"], 1),
+        _R("A transfer sent to the wrong address is…",
+           ["Reversible by support", "Generally unrecoverable",
+            "Automatically refunded", "Returned after 30 days"], 1),
+        _R("The common thread in crypto scams is…",
+           ["Complex technology", "Urgency combined with a promised return",
+            "Low fees", "Regulatory approval"], 1),
+        _R("Seeing a price quoted on a thin token means…",
+           ["You can always sell there", "Not necessarily that you can sell at that price",
+            "The project is audited", "Liquidity is guaranteed"], 1),
+        _R("Whoever holds the private keys…",
+           ["Controls the coins", "Owns the exchange", "Pays the fees",
+            "Must report to regulators"], 0),
+    ],
+    "forex-101": [
+        _R("Buying EUR/USD is a bet that…",
+           ["The euro strengthens against the dollar", "Both currencies rise",
+            "The dollar strengthens", "Rates fall"], 0),
+        _R("In EUR/USD = 1.10, the 1.10 means…",
+           ["One euro costs 1.10 dollars", "One dollar costs 1.10 euros",
+            "The pair rose 1.10%", "There are 1.10 pips"], 0),
+        _R("Forex is commonly traded with leverage because…",
+           ["Regulators require it", "Individual price moves are very small",
+            "It removes risk", "Pairs are illiquid"], 1),
+        _R("The biggest scheduled driver of currency moves is usually…",
+           ["Company earnings", "Central bank rate decisions",
+            "Dividend dates", "Index rebalancing"], 1),
+        _R("At 50:1 leverage, a 2% adverse move…",
+           ["Costs 2% of your stake", "Can wipe out your entire stake",
+            "Is hedged automatically", "Triggers a refund"], 1),
+    ],
+    "forex-pairs": [
+        _R("Exotic currency pairs typically have…",
+           ["The tightest spreads", "Wider spreads and sharper moves",
+            "No volatility", "Guaranteed liquidity"], 1),
+        _R("Forex liquidity is generally highest…",
+           ["Overnight in Asia", "When London and New York overlap",
+            "On weekends", "At month end"], 1),
+        _R("Most retail forex brokers are paid primarily through…",
+           ["A monthly fee", "The spread", "Government subsidy", "Deposit interest"], 1),
+        _R("Holding a forex position overnight involves…",
+           ["No cost", "A financing adjustment from the rate difference",
+            "A forced close", "Double spread"], 1),
+        _R("Beginners are generally best served by…",
+           ["Exotic pairs", "Major pairs", "Weekend trading", "Maximum leverage"], 1),
+    ],
+}
+
+LEARN_COURSES = {c["id"]: c for c in LEARN_LIBRARY}
+PERSONAL_COURSE_ID = "personal"     # the AI course Titan writes from your test
+
+
+def course_review(course_id: str) -> list:
+    """The 5-question end-of-unit review for a course."""
+    return LEARN_REVIEWS.get(course_id) or []
+
+
+def learn_course(course_id: str) -> dict | None:
+    """A course by id. The Titan-generated one lives in the user's record."""
+    return LEARN_COURSES.get(course_id)
+
+
+# ---------- FAAM Learn — points, ranks & course progress ----------------------
+# Points are awarded and stored HERE, never sent up from the page: the browser
+# says "I answered lesson 3's check with option B" and the backend decides
+# whether that earns anything. The generated course is stored per user too, so
+# the check answers stay server-side and progress survives a reload.
+LEARN_FILE = DATA_DIR / "learn.json"
+LEARN_PTS_PER_LEVEL = 10        # placement answer: 10/20/30 by question difficulty
+LEARN_PTS_LESSON = 20           # reading a lesson through
+LEARN_PTS_CHECK = 50            # lesson check question, right on the first try
+LEARN_PTS_CHECK_RETRY = 20      # right after a miss — still worth something
+LEARN_PTS_PERFECT = 100         # bonus for a placement test with no misses
+LEARN_PTS_COURSE = 150          # bonus for passing a course's end-of-unit review
+LEARN_PTS_REVIEW = 15           # per correct answer in the review
+LEARN_PTS_ARTICLE = 40          # bonus for reading every section of an article
+LEARN_STREAK_BONUS = 15         # extra per check once you're on a 3+ run
+LEARN_RANKS = [
+    (0, "Rookie"), (250, "Apprentice"), (600, "Analyst"),
+    (1100, "Strategist"), (1800, "Titan Scholar"),
+]
+
+
+def learn_rank(xp: int) -> dict:
+    """Rank name plus how far into it you are, for the progress bar."""
+    xp = max(0, int(xp))
+    name, floor = LEARN_RANKS[0][1], 0
+    nxt, ceil_ = None, None
+    for need, label in LEARN_RANKS:
+        if xp >= need:
+            name, floor = label, need
+        elif nxt is None:
+            nxt, ceil_ = label, need
+    span = (ceil_ - floor) if ceil_ else 0
+    return {
+        "name": name,
+        "next": nxt,
+        "toNext": max(0, (ceil_ - xp)) if ceil_ else 0,
+        "pct": round((xp - floor) / span * 100, 1) if span else 100.0,
+    }
+
+
+def _learn_fresh() -> dict:
+    return {"xp": 0, "attempts": 0, "best": 0, "streak": 0, "bestStreak": 0,
+            "courses": {}, "personal": [], "result": {}, "log": [],
+            "day": "", "days": 0, "bestDays": 0, "certs": {},
+            "created": int(time.time())}
+
+
+def _learn_migrate(p: dict) -> dict:
+    """Older records held one flat course; move it under the personal course."""
+    if "course" in p or "lessons" in p:
+        old_course, old_lessons = p.pop("course", []), p.pop("lessons", {})
+        p.setdefault("personal", old_course)
+        if old_lessons:
+            p.setdefault("courses", {})[PERSONAL_COURSE_ID] = {"lessons": old_lessons}
+        p.pop("courseBonus", None)
+    return p
+
+
+# Every Learn mutation is read-modify-write over one JSON file. _save_json locks
+# the write itself, but that is not enough: two requests can both read, both
+# mutate, and the second write silently discards the first. Reading an article
+# fires several of these at once, so without this lock sections go missing.
+_LEARN_LOCK = threading.RLock()
+
+
+def learn_progress(username: str) -> dict:
+    """This user's Learn record, created on first use."""
+    d = _load_json(LEARN_FILE, {})
+    p = d.get(username)
+    if not isinstance(p, dict):
+        p = _learn_fresh()
+        d[username] = p
+        _save_json(LEARN_FILE, d)
+    p = _learn_migrate(p)
+    for k, v in _learn_fresh().items():
+        p.setdefault(k, v)
+    return p
+
+
+def learn_write(username: str, p: dict) -> None:
+    d = _load_json(LEARN_FILE, {})
+    d[username] = p
+    _save_json(LEARN_FILE, d)
+
+
+def learn_award(p: dict, points: int, why: str) -> int:
+    """Add points and record why, so the UI can show what was just earned."""
+    points = max(0, int(points))
+    p["xp"] = max(0, int(p.get("xp") or 0)) + points
+    if points:
+        p.setdefault("log", []).append({"pts": points, "why": why, "ts": int(time.time())})
+        p["log"] = p["log"][-40:]
+    return points
+
+
+def learn_touch_day(p: dict) -> int:
+    """Daily learning streak. Same day = no change, yesterday = +1, older = reset."""
+    # time.gmtime avoids datetime.utcnow(), which is deprecated and slated for
+    # removal; both give the same UTC calendar day.
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    last = p.get("day") or ""
+    if last == today:
+        return 0
+    yesterday = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
+    p["days"] = (int(p.get("days") or 0) + 1) if last == yesterday else 1
+    p["day"] = today
+    p["bestDays"] = max(int(p.get("bestDays") or 0), p["days"])
+    return p["days"]
+
+
+def learn_lessons_of(p: dict, course_id: str) -> list:
+    """The lesson list for a course: from the library, or the Titan-written one."""
+    if course_id == PERSONAL_COURSE_ID:
+        return list(p.get("personal") or [])
+    c = learn_course(course_id)
+    return list(c["lessons"]) if c else []
+
+
+def _course_slot(p: dict, course_id: str) -> dict:
+    return (p.setdefault("courses", {})).setdefault(course_id, {"lessons": {}})
+
+
+def learn_course_stats(p: dict, course_id: str) -> dict:
+    """How far through one course this user is, and what they earned in it.
+    An article's sections must all be read before the review unlocks, and the
+    certificate comes from passing that review — not merely scrolling."""
+    sections = learn_lessons_of(p, course_id)
+    done = (p.get("courses") or {}).get(course_id) or {}
+    marks = done.get("lessons") or {}
+    rev = done.get("review") or {}
+    read = sum(1 for i in range(len(sections)) if (marks.get(str(i)) or {}).get("read"))
+    passed = sum(1 for i in range(len(sections))
+                 if (marks.get(str(i)) or {}).get("check") in ("right", "late"))
+    earned = sum(int((marks.get(str(i)) or {}).get("pts") or 0) for i in range(len(sections)))
+    earned += int(rev.get("pts") or 0)
+    total = len(sections)
+    article_done = bool(total) and read == total
+    review = course_review(course_id)
+    return {
+        "total": total, "read": read, "passed": passed, "earned": earned,
+        "pct": round(read / total * 100) if total else 0,
+        "articleDone": article_done,
+        # Progress bar counts the review as the final step of the unit.
+        "reviewLen": len(review),
+        "reviewUnlocked": article_done and bool(review),
+        "reviewBest": int(rev.get("best") or 0),
+        "reviewAttempts": int(rev.get("attempts") or 0),
+        "reviewPassed": bool(rev.get("passed")),
+        "reviewPass": REVIEW_PASS,
+        "done": article_done and (bool(rev.get("passed")) or not review),
+        "certified": bool((p.get("certs") or {}).get(course_id)),
+        "next": next((i for i in range(total)
+                      if not (marks.get(str(i)) or {}).get("read")), 0),
+    }
+
+
+def learn_library_public(p: dict) -> list:
+    """The catalog with this user's progress folded in. No lesson bodies, no keys."""
+    out = []
+    for c in LEARN_LIBRARY:
+        s = learn_course_stats(p, c["id"])
+        out.append({
+            "id": c["id"], "cat": c["cat"], "title": c["title"], "blurb": c["blurb"],
+            "level": c["level"], "mins": c["mins"], "lessons": len(c["lessons"]),
+            "xp": len(c["lessons"]) * (LEARN_PTS_LESSON + LEARN_PTS_CHECK),
+            "progress": s,
+        })
+    # The Titan-written course sits at the top of the catalog once it exists.
+    personal = p.get("personal") or []
+    if personal:
+        s = learn_course_stats(p, PERSONAL_COURSE_ID)
+        out.insert(0, {
+            "id": PERSONAL_COURSE_ID, "cat": "personal",
+            "title": "Built for you by Titan",
+            "blurb": "Generated from your placement test, weakest topics first.",
+            "level": (p.get("result") or {}).get("level") or "Personal",
+            "mins": max(2, len(personal) * 2), "lessons": len(personal),
+            "xp": len(personal) * (LEARN_PTS_LESSON + LEARN_PTS_CHECK),
+            "progress": s, "personal": True,
+        })
+    return out
+
+
+def learn_public(p: dict) -> dict:
+    """Points, rank, streaks and the catalog. Never any answer keys."""
+    lib = learn_library_public(p)
+    return {
+        "xp": int(p.get("xp") or 0),
+        "rank": learn_rank(p.get("xp") or 0),
+        "streak": int(p.get("streak") or 0),
+        "bestStreak": int(p.get("bestStreak") or 0),
+        "days": int(p.get("days") or 0),
+        "bestDays": int(p.get("bestDays") or 0),
+        "attempts": int(p.get("attempts") or 0),
+        "best": int(p.get("best") or 0),
+        "categories": LEARN_CATEGORIES,
+        "library": lib,
+        "certs": sorted((p.get("certs") or {}).keys()),
+        "coursesDone": sum(1 for c in lib if c["progress"]["done"]),
+        "lessonsDone": sum(c["progress"]["read"] for c in lib),
+        "result": p.get("result") or {},
+        "log": (p.get("log") or [])[-8:][::-1],
+        "points": {"lesson": LEARN_PTS_LESSON, "check": LEARN_PTS_CHECK,
+                   "retry": LEARN_PTS_CHECK_RETRY, "streak": LEARN_STREAK_BONUS,
+                   "course": LEARN_PTS_COURSE},
+    }
+
+
+def learn_course_public(p: dict, course_id: str) -> dict | None:
+    """One course with its lessons, answer keys stripped."""
+    lessons = learn_lessons_of(p, course_id)
+    if not lessons:
+        return None
+    meta = learn_course(course_id)
+    marks = ((p.get("courses") or {}).get(course_id) or {}).get("lessons") or {}
+    rows = []
+    for i, c in enumerate(lessons):
+        done = marks.get(str(i)) or {}
+        state = done.get("check")          # "right" | "late" | "wrong" | None
+        row = {
+            "t": c.get("t", ""), "b": c.get("b", ""),
+            "q": c.get("q") or "", "o": list(c.get("o") or []),
+            "pts": LEARN_PTS_CHECK if c.get("q") else LEARN_PTS_LESSON,
+            "read": bool(done.get("read")), "check": state,
+            "earned": int(done.get("pts") or 0),
+        }
+        # Revealed only once answered correctly, so the page can keep the right
+        # option marked without ever holding an unanswered key.
+        if state in ("right", "late") and c.get("q"):
+            row["ans"] = int(c.get("c") or 0)
+        rows.append(row)
+    stats = learn_course_stats(p, course_id)
+    # Review questions ship without the key, and only once the article is read.
+    review = []
+    if stats["reviewUnlocked"]:
+        review = [{"q": q["q"], "o": list(q["o"])} for q in course_review(course_id)]
+    return {
+        "id": course_id,
+        "title": meta["title"] if meta else "Built for you by Titan",
+        "blurb": meta["blurb"] if meta else "Generated from your placement test.",
+        "cat": meta["cat"] if meta else "personal",
+        "level": meta["level"] if meta else ((p.get("result") or {}).get("level") or "Personal"),
+        "mins": meta["mins"] if meta else max(2, len(lessons) * 2),
+        "lessons": rows,
+        "review": review,
+        "progress": stats,
+    }
+
+
+def learn_lesson_read(username: str, course_id: str, idx: int) -> dict:
+    """Mark a lesson read. Points land once per lesson, not once per revisit."""
+    with _LEARN_LOCK:
+        p = learn_progress(username)
+        lessons = learn_lessons_of(p, course_id)
+        if not (0 <= idx < len(lessons)):
+            return {"error": "no such lesson"}
+        slot = (_course_slot(p, course_id).setdefault("lessons", {})).setdefault(str(idx), {})
+        gained = 0
+        if not slot.get("read"):
+            learn_touch_day(p)
+            slot["read"] = True
+            gained = learn_award(p, LEARN_PTS_LESSON, f"Read: {lessons[idx].get('t', 'section')}")
+            slot["pts"] = int(slot.get("pts") or 0) + gained
+            # Finishing the article is its own small bonus; the certificate comes
+            # from passing the review, so reading alone can't earn one.
+            marks = _course_slot(p, course_id)["lessons"]
+            if all((marks.get(str(i)) or {}).get("read") for i in range(len(lessons))):
+                cs = _course_slot(p, course_id)
+                if not cs.get("articleBonus"):
+                    cs["articleBonus"] = True
+                    meta = learn_course(course_id)
+                    gained += learn_award(p, LEARN_PTS_ARTICLE,
+                                          f"Article read: {meta['title'] if meta else 'your course'}")
+        learn_write(username, p)
+        return {"ok": True, "gained": gained, "course": learn_course_public(p, course_id),
+                **learn_public(p)}
+
+
+def learn_review_submit(username: str, course_id: str, answers: list) -> dict:
+    """Grade the 5-question end-of-unit review. Graded here so the answer key
+    never leaves the backend, and only a pass earns the certificate."""
+    with _LEARN_LOCK:
+        p = learn_progress(username)
+        review = course_review(course_id)
+        if not review:
+            return {"error": "this course has no review"}
+        stats = learn_course_stats(p, course_id)
+        if not stats["articleDone"]:
+            return {"error": "Read the whole article before taking the review."}
+        if not isinstance(answers, list) or len(answers) != len(review):
+            return {"error": f"answer all {len(review)} questions"}
+
+        detail, score = [], 0
+        for i, q in enumerate(review):
+            try:
+                chosen = int(answers[i])
+            except Exception:  # noqa: BLE001
+                chosen = -1
+            ok = chosen == q["c"]
+            score += 1 if ok else 0
+            detail.append({"q": q["q"], "correct": ok,
+                           "your": q["o"][chosen] if 0 <= chosen < len(q["o"]) else "—",
+                           "answer": q["o"][q["c"]]})
+
+        cs = _course_slot(p, course_id)
+        rev = cs.setdefault("review", {})
+        passed = score >= REVIEW_PASS
+        first_pass = passed and not rev.get("passed")
+        improved = score > int(rev.get("best") or 0)
+
+        learn_touch_day(p)
+        rev["attempts"] = int(rev.get("attempts") or 0) + 1
+        gained = 0
+        # Points for correct answers are paid on your best attempt only, so retaking
+        # can improve a score but can't farm the same questions for points.
+        if improved:
+            delta = score - int(rev.get("best") or 0)
+            gained += learn_award(p, delta * LEARN_PTS_REVIEW,
+                                  f"Review: {score}/{len(review)}")
+            rev["best"] = score
+        if first_pass:
+            rev["passed"] = True
+            meta = learn_course(course_id)
+            title = meta["title"] if meta else "your course"
+            gained += learn_award(p, LEARN_PTS_COURSE, f"Passed review: {title}")
+            (p.setdefault("certs", {}))[course_id] = int(time.time())
+        rev["pts"] = int(rev.get("pts") or 0) + gained
+        learn_write(username, p)
+        return {"ok": True, "score": score, "total": len(review), "passed": passed,
+                "pass": REVIEW_PASS, "firstPass": first_pass, "detail": detail,
+                "gained": gained, "course": learn_course_public(p, course_id),
+                **learn_public(p)}
+
+
+def learn_lesson_check(username: str, course_id: str, idx: int, chosen: int) -> dict:
+    """Grade a lesson's check question on the backend and award the points."""
+    with _LEARN_LOCK:
+        p = learn_progress(username)
+        lessons = learn_lessons_of(p, course_id)
+        if not (0 <= idx < len(lessons)):
+            return {"error": "no such lesson"}
+        lesson = lessons[idx]
+        if not lesson.get("q") or not lesson.get("o"):
+            return {"error": "this lesson has no check question"}
+        slot = (_course_slot(p, course_id).setdefault("lessons", {})).setdefault(str(idx), {})
+        correct = int(lesson.get("c") or 0)
+        ok = chosen == correct
+        gained, state = 0, slot.get("check")
+
+        if ok and state not in ("right", "late"):
+            learn_touch_day(p)
+            state = "late" if state == "wrong" else "right"
+            gained = learn_award(
+                p, LEARN_PTS_CHECK if state == "right" else LEARN_PTS_CHECK_RETRY,
+                f"Check passed: {lesson.get('t', 'lesson')}")
+            p["streak"] = int(p.get("streak") or 0) + 1
+            if p["streak"] >= 3:
+                gained += learn_award(p, LEARN_STREAK_BONUS, f"{p['streak']} in a row")
+            p["bestStreak"] = max(int(p.get("bestStreak") or 0), p["streak"])
+            slot["pts"] = int(slot.get("pts") or 0) + gained
+        elif not ok:
+            if state not in ("right", "late"):
+                state = "wrong"
+            p["streak"] = 0
+        slot["check"] = state
+        learn_write(username, p)
+        return {"ok": True, "correct": ok,
+                "answer": lesson["o"][correct] if 0 <= correct < len(lesson["o"]) else "",
+                "gained": gained, "course": learn_course_public(p, course_id),
+                **learn_public(p)}
+
+
+# ---------- Titan diagnostic (backend-graded placement test) -------------------
+# The questions and the evaluation both live here so Titan — not the browser —
+# decides what you know. The AI writes the strengths/weaknesses summary and the
+# tailored course; every step has a deterministic fallback so this still works
+# with no AI key at all.
+#
+# "d" is difficulty 1-3: it weights the points a correct answer earns and lets a
+# retake pull harder questions on topics you already cleared. The bank is much
+# larger than one test (DIAG_SERVE) so retakes aren't the same test twice.
+TITAN_DIAGNOSTIC = [
+    # ── Ownership ───────────────────────────────────────────────────────────
+    {"id": "own", "topic": "Ownership", "d": 1,
+     "q": "What does one share of common stock generally represent?",
+     "a": ["A loan to the company", "Partial ownership in the company",
+           "A guaranteed return", "An insured deposit"], "correct": 1},
+    {"id": "own2", "topic": "Ownership", "d": 2,
+     "q": "A company issues a lot of new shares. All else equal, what happens to an existing shareholder's stake?",
+     "a": ["It grows", "It is unchanged", "It is diluted to a smaller percentage",
+           "It converts to a bond"], "correct": 2},
+    {"id": "own3", "topic": "Ownership", "d": 3,
+     "q": "If a company goes bankrupt, who is generally paid last?",
+     "a": ["Common shareholders", "Bondholders", "Employees for wages owed",
+           "Secured lenders"], "correct": 0},
+    # ── Total return & dividends ────────────────────────────────────────────
+    {"id": "ret", "topic": "Total return", "d": 1,
+     "q": "Which two things can contribute to a stock investor's total return?",
+     "a": ["Price changes and dividends", "Revenue and headcount",
+           "Interest rates and share count", "Volume and brand value"], "correct": 0},
+    {"id": "ret2", "topic": "Total return", "d": 2,
+     "q": "A stock's price is flat for a year but it paid a 3% dividend. Your total return is roughly…",
+     "a": ["0%", "About 3%", "Negative 3%", "Impossible to tell"], "correct": 1},
+    {"id": "dvd", "topic": "Dividends", "d": 1,
+     "q": "What is a dividend?",
+     "a": ["A fee you pay to hold a stock", "A share of profits paid out to shareholders",
+           "A guaranteed interest payment", "A discount on new shares"], "correct": 1},
+    {"id": "dvd2", "topic": "Dividends", "d": 3,
+     "q": "Which statement about dividends is accurate?",
+     "a": ["Every company pays one", "A company can reduce or stop paying one",
+           "They are legally guaranteed once announced for all future quarters",
+           "They always mean the stock is safe"], "correct": 1},
+    # ── ETFs & funds ────────────────────────────────────────────────────────
+    {"id": "etf", "topic": "ETFs & funds", "d": 1,
+     "q": "Which statement about a broad-market ETF is generally accurate?",
+     "a": ["It guarantees against losses", "It holds only one company",
+           "It can spread exposure across many companies",
+           "It always beats individual stocks"], "correct": 2},
+    {"id": "etf2", "topic": "ETFs & funds", "d": 2,
+     "q": "What does a fund's expense ratio measure?",
+     "a": ["Its yearly cost as a percentage of your investment",
+           "How much it returned last year", "The commission your broker charges",
+           "How risky its holdings are"], "correct": 0},
+    {"id": "idx", "topic": "ETFs & funds", "d": 2,
+     "q": "What is a market index, such as the S&P 500?",
+     "a": ["A company you can buy shares in", "A measure of a defined basket of securities",
+           "A government price guarantee", "A type of brokerage account"], "correct": 1},
+    # ── Percent change & math ───────────────────────────────────────────────
+    {"id": "pct", "topic": "Percent change", "d": 1,
+     "q": "A stock goes from $50 to $55. What is the percentage change?",
+     "a": ["5%", "10%", "0.5%", "15%"], "correct": 1},
+    {"id": "pct2", "topic": "Percent change", "d": 3,
+     "q": "A stock falls 50%, then rises 50%. Compared with where it started, it is now…",
+     "a": ["Back to even", "Still down about 25%", "Up about 25%", "Down about 50%"],
+     "correct": 1},
+    {"id": "comp", "topic": "Compounding", "d": 2,
+     "q": "What does compounding mean for a long-term investor?",
+     "a": ["Returns are taxed twice", "Gains can themselves generate future gains",
+           "Losses are automatically recovered", "Fees are refunded over time"], "correct": 1},
+    # ── Charts & quotes ─────────────────────────────────────────────────────
+    {"id": "chart", "topic": "Charts", "d": 1,
+     "q": "What can a price chart tell you with certainty?",
+     "a": ["Tomorrow's close", "That a trend must continue",
+           "How price moved over the period shown", "The company's fair value"], "correct": 2},
+    {"id": "chart2", "topic": "Charts", "d": 2,
+     "q": "What does a stock's 52-week range show?",
+     "a": ["Its predicted range next year", "Its highest and lowest price over the past year",
+           "The analyst price target", "Its average daily volume"], "correct": 1},
+    {"id": "vol", "topic": "Charts", "d": 3,
+     "q": "A stock trades on very low volume. What is the practical risk?",
+     "a": ["It cannot lose value", "Buying or selling may move the price against you",
+           "Dividends are suspended", "The chart stops updating"], "correct": 1},
+    # ── Diversification ─────────────────────────────────────────────────────
+    {"id": "div", "topic": "Diversification", "d": 1,
+     "q": "What is diversification intended to reduce?",
+     "a": ["Every possible loss", "Dependence on any single holding",
+           "All market volatility", "The need to research"], "correct": 1},
+    {"id": "div2", "topic": "Diversification", "d": 3,
+     "q": "Why is owning ten software stocks less diversified than it looks?",
+     "a": ["Ten holdings is always too few", "They tend to move together on the same news",
+           "Software stocks cannot pay dividends", "Brokers limit the sector"], "correct": 1},
+    # ── Order types ─────────────────────────────────────────────────────────
+    {"id": "order", "topic": "Order types", "d": 1,
+     "q": "What does a limit order do?",
+     "a": ["Buys at any price immediately", "Sets a price you're willing to accept",
+           "Guarantees execution", "Cancels other orders"], "correct": 1},
+    {"id": "order2", "topic": "Order types", "d": 2,
+     "q": "What is the main trade-off of a market order?",
+     "a": ["It usually fills fast, but not at a price you set",
+           "It sets your price, but may never fill", "It cannot be used for selling",
+           "It always costs more in commission"], "correct": 0},
+    {"id": "order3", "topic": "Order types", "d": 3,
+     "q": "What does a stop order do once its stop price is reached?",
+     "a": ["Cancels the position", "Becomes an order to trade, at whatever price is available",
+           "Locks in the stop price exactly", "Freezes the stock's price"], "correct": 1},
+    {"id": "spread", "topic": "Order types", "d": 3,
+     "q": "What is the bid-ask spread?",
+     "a": ["A broker's monthly fee", "The gap between the best buy and best sell price",
+           "The stock's daily range", "A tax on short-term trades"], "correct": 1},
+    # ── Risk ────────────────────────────────────────────────────────────────
+    {"id": "risk", "topic": "Risk", "d": 1,
+     "q": "Which portfolio carries the clearest concentration risk?",
+     "a": ["A broad index fund", "Ten stocks across industries",
+           "Nearly everything in one stock", "A mix of stocks and bonds"], "correct": 2},
+    {"id": "risk2", "topic": "Risk", "d": 2,
+     "q": "What does volatility describe?",
+     "a": ["How much a price swings over time", "How profitable a company is",
+           "How many shares exist", "How likely a dividend is"], "correct": 0},
+    {"id": "risk3", "topic": "Risk", "d": 2,
+     "q": "Money you will need in six months is generally best kept…",
+     "a": ["In a single fast-growing stock", "Out of the market, in cash or savings",
+           "In the most volatile ETF you can find", "Split across ten stocks"], "correct": 1},
+    {"id": "risk4", "topic": "Risk", "d": 3,
+     "q": "What does buying on margin — investing with borrowed money — do to risk?",
+     "a": ["Removes it", "Magnifies both gains and losses",
+           "Only magnifies gains", "Caps losses at your deposit"], "correct": 1},
+    # ── Investing habits & behaviour ────────────────────────────────────────
+    {"id": "dca", "topic": "Investing habits", "d": 1,
+     "q": "What is dollar-cost averaging?",
+     "a": ["Buying only after a drop", "Investing equal amounts on a schedule",
+           "Selling every month", "Guaranteeing a lower average price"], "correct": 1},
+    {"id": "dca2", "topic": "Investing habits", "d": 2,
+     "q": "What is usually recommended before investing money in the market?",
+     "a": ["A margin account", "An emergency cash buffer and a clear time horizon",
+           "A day-trading strategy", "A hot stock tip"], "correct": 1},
+    {"id": "beh", "topic": "Behaviour", "d": 2,
+     "q": "The market drops sharply and your plan has not changed. Selling everything in a panic mainly risks…",
+     "a": ["Nothing — cash is always safest", "Locking in the loss and missing a recovery",
+           "A broker penalty", "Losing your dividends permanently"], "correct": 1},
+    {"id": "beh2", "topic": "Behaviour", "d": 2,
+     "q": "A stock is trending on social media with promises of quick gains. The right first move is…",
+     "a": ["Buy immediately before it runs", "Research the business and the risk yourself",
+           "Borrow money to buy more", "Copy the largest position you see"], "correct": 1},
+    {"id": "fee", "topic": "Costs", "d": 3,
+     "q": "Why do small yearly fees matter so much over decades?",
+     "a": ["They are charged twice a year", "They compound, quietly reducing your ending balance",
+           "They raise your tax bracket", "They are deducted from dividends only"], "correct": 1},
+    # ── Valuation ───────────────────────────────────────────────────────────
+    {"id": "pe", "topic": "Valuation", "d": 1,
+     "q": "A P/E ratio compares a company's price to its…",
+     "a": ["Earnings", "Revenue", "Debt", "Dividend"], "correct": 0},
+    {"id": "pe2", "topic": "Valuation", "d": 3,
+     "q": "Two companies have very different P/E ratios. What does that alone tell you?",
+     "a": ["The lower one is a better buy", "The higher one is overpriced",
+           "Little on its own — growth, risk and industry all matter",
+           "The higher one pays a bigger dividend"], "correct": 2},
+    {"id": "cap", "topic": "Valuation", "d": 2,
+     "q": "How is a company's market capitalisation calculated?",
+     "a": ["Share price × shares outstanding", "Revenue minus debt",
+           "Price ÷ earnings", "Total assets on the balance sheet"], "correct": 0},
+    {"id": "eps", "topic": "Valuation", "d": 2,
+     "q": "What does earnings per share (EPS) measure?",
+     "a": ["Profit allocated to each outstanding share", "The dividend you receive per share",
+           "The share price a year from now", "Revenue divided by employees"], "correct": 0},
+]
+
+# How many questions one placement test serves, sampled from the bank above so a
+# retake asks different questions while still covering every topic.
+DIAG_SERVE = 15
+
+
+def titan_diagnostic_set(count: int = DIAG_SERVE) -> list:
+    """One test: one question per topic first (so every area is measured), then
+    the hardest remaining questions, shuffled into a random order."""
+    by_topic: dict = {}
+    for q in TITAN_DIAGNOSTIC:
+        by_topic.setdefault(q["topic"], []).append(q)
+    picked, rest = [], []
+    for topic in sorted(by_topic):
+        pool = by_topic[topic][:]
+        random.shuffle(pool)
+        picked.append(pool[0])
+        rest.extend(pool[1:])
+    random.shuffle(rest)
+    picked.extend(rest[:max(0, count - len(picked))])
+    random.shuffle(picked)
+    return picked[:count]
+
+TITAN_DIAG_SYSTEM = (
+    "You are Titan, FAAM's built-in AI analyst, evaluating a beginner's stock-knowledge "
+    "quiz. Output ONLY minified JSON with keys: level (one of Foundation|Developing|"
+    "Proficient), summary (one encouraging sentence, max 22 words), strengths (array of "
+    "2-3 short phrases), weaknesses (array of 2-3 short phrases), course (array of 5-7 "
+    "objects each with t = short lesson title and b = 2-3 sentence plain-English lesson "
+    "body, q = one multiple-choice check question testing that lesson, o = array of "
+    "exactly 4 short plausible options, c = the 0-based index of the correct option). "
+    "Base strengths/weaknesses only on the topics given. Lessons must target the "
+    "weak topics first, and each q must be answerable from its own b. "
+    "Never give personalized financial advice; this is education."
+)
+
+# Check questions for the deterministic course, so the point system still works
+# with no AI key at all. Index-matched to COURSE.
+COURSE_CHECKS = [
+    {"q": "How does investing differ from money in a savings account?",
+     "o": ["It cannot lose value", "It may grow more, but the value can fall",
+           "It is insured against loss", "It pays a fixed rate"], "c": 1},
+    {"q": "What does owning a share make you?",
+     "o": ["A lender to the company", "A part-owner of the company",
+           "An employee", "A guaranteed earner"], "c": 1},
+    {"q": "What does a broad index fund do?",
+     "o": ["Guarantees a return", "Spreads exposure across many companies",
+           "Holds one stock", "Avoids all risk"], "c": 1},
+    {"q": "What does a price chart actually show?",
+     "o": ["Where price will go", "The company's true value",
+           "How price moved over the period shown", "Guaranteed support levels"], "c": 2},
+    {"q": "What can diversification NOT do?",
+     "o": ["Reduce single-holding dependence", "Spread exposure",
+           "Eliminate market losses", "Lower concentration risk"], "c": 2},
+    {"q": "What is dollar-cost averaging?",
+     "o": ["Investing equal amounts on a schedule", "Buying only at the lows",
+           "Selling monthly", "A guaranteed profit method"], "c": 0},
+    {"q": "Which is a common beginner mistake?",
+     "o": ["Writing a plan", "Researching costs", "Chasing hype and panic-selling",
+           "Contributing regularly"], "c": 2},
+    {"q": "Who makes the final call on your investments?",
+     "o": ["FAAM", "Titan", "You", "Your broker"], "c": 2},
+]
+
+
+def _titan_level(score: int, total: int) -> str:
+    """Level from the share you got right, so it holds at any test length."""
+    pct = (score / total * 100) if total else 0
+    return "Foundation" if pct < 50 else ("Developing" if pct < 80 else "Proficient")
+
+
+def _titan_diag_fallback(correct_topics: list, wrong_topics: list,
+                         score: int, total: int) -> dict:
+    """Deterministic evaluation when the AI is unavailable."""
+    lessons = [dict(c, **COURSE_CHECKS[i]) if i < len(COURSE_CHECKS) else dict(c)
+               for i, c in enumerate(COURSE)]
+    return {
+        "level": _titan_level(score, total),
+        "summary": f"You answered {score} of {total} correctly — here's where to focus.",
+        "strengths": correct_topics[:3] or ["Willingness to start learning"],
+        "weaknesses": wrong_topics[:3] or ["Keep reinforcing the basics"],
+        "course": lessons[:6],
+        "source": "titan-local",
+    }
+
+
+def _clean_lesson(c: dict) -> dict:
+    """Keep a generated lesson only if it's usable; drop a malformed check
+    question rather than the whole lesson (it still earns reading points)."""
+    out = {"t": str(c.get("t") or "")[:90], "b": str(c.get("b") or "")[:900]}
+    opts = [str(x)[:120] for x in (c.get("o") or []) if str(x).strip()]
+    try:
+        ci = int(c.get("c"))
+    except Exception:  # noqa: BLE001
+        ci = -1
+    if c.get("q") and len(opts) == 4 and 0 <= ci < 4:
+        out.update({"q": str(c["q"])[:220], "o": opts, "c": ci})
+    return out
+
+
+def titan_evaluate_diagnostic(answers: list, username: str = "") -> dict:
+    """Grade the diagnostic and build a tailored course. Titan does the thinking.
+    Harder questions are worth more points, and a clean sweep earns a bonus."""
+    by_id = {q["id"]: q for q in TITAN_DIAGNOSTIC}
+    correct_topics, wrong_topics, score, detail, earned = [], [], 0, [], 0
+    seen = set()
+    for a in answers or []:
+        q = by_id.get(a.get("id"))
+        if not q or q["id"] in seen:
+            continue
+        seen.add(q["id"])
+        try:
+            chosen = int(a.get("chosen"))
+        except Exception:  # noqa: BLE001
+            chosen = -1
+        ok = chosen == q["correct"]
+        diff = int(q.get("d") or 1)
+        pts = diff * LEARN_PTS_PER_LEVEL if ok else 0
+        score += 1 if ok else 0
+        earned += pts
+        (correct_topics if ok else wrong_topics).append(q["topic"])
+        detail.append({"id": q["id"], "topic": q["topic"], "correct": ok, "d": diff,
+                       "pts": pts,
+                       "your": q["a"][chosen] if 0 <= chosen < len(q["a"]) else "—",
+                       "answer": q["a"][q["correct"]], "q": q["q"]})
+
+    total = len(detail)
+    # Points only bank on a full-length test. Otherwise a client could post one
+    # easy question it knows the answer to and collect a "perfect" bonus.
+    full = total >= DIAG_SERVE
+    perfect = full and score == total
+    if perfect:
+        earned += LEARN_PTS_PERFECT
+    if not full:
+        earned = 0
+    base = {"score": score, "total": total, "detail": detail, "model": TITAN_VERSION,
+            "earned": earned, "perfect": perfect, "counted": full}
+
+    out = None
+    if OPENAI_API_KEY:
+        try:
+            prompt = (
+                f"Score: {score}/{total}.\n"
+                f"Correct topics: {', '.join(correct_topics) or 'none'}.\n"
+                f"Missed topics: {', '.join(wrong_topics) or 'none'}."
+            )
+            r = openai_chat([{"role": "user", "content": prompt}], system=TITAN_DIAG_SYSTEM)
+            if "error" not in r:
+                record_cost(chat_cost(r))
+                m = re.search(r"\{.*\}", extract_text(r) or "", re.S)
+                if m:
+                    got = json.loads(m.group(0))
+                    course = [_clean_lesson(c) for c in (got.get("course") or [])
+                              if isinstance(c, dict) and c.get("t") and c.get("b")]
+                    if course:
+                        out = {
+                            "level": str(got.get("level") or _titan_level(score, total))[:24],
+                            "summary": str(got.get("summary") or "")[:200],
+                            "strengths": [str(x)[:60] for x in (got.get("strengths") or [])][:3]
+                                         or correct_topics[:3],
+                            "weaknesses": [str(x)[:60] for x in (got.get("weaknesses") or [])][:3]
+                                          or wrong_topics[:3],
+                            "course": course[:7],
+                            "source": "titan-ai",
+                        }
+        except Exception:  # noqa: BLE001
+            out = None
+    if out is None:
+        out = _titan_diag_fallback(correct_topics, wrong_topics, score, total)
+
+    res = {**base, **out}
+    # The stored course keeps its check answers; the reply must not. Same rule as
+    # the placement questions: the key never reaches the browser.
+    res["course"] = [{k: v for k, v in c.items() if k != "c"} for c in out["course"]]
+    if username:
+        # Bank the points and keep the course (with its answer key) server-side.
+        p = learn_progress(username)
+        p["attempts"] = int(p.get("attempts") or 0) + 1
+        p["best"] = max(int(p.get("best") or 0), score)
+        p["personal"] = out["course"]
+        # A freshly written course starts unread, and its old certificate goes.
+        (p.setdefault("courses", {}))[PERSONAL_COURSE_ID] = {"lessons": {}}
+        (p.setdefault("certs", {})).pop(PERSONAL_COURSE_ID, None)
+        learn_touch_day(p)
+        p["result"] = {k: res[k] for k in
+                       ("score", "total", "level", "summary", "strengths",
+                        "weaknesses", "detail", "source", "perfect")}
+        learn_award(p, earned, f"Placement test: {score}/{total}"
+                    + (" — perfect!" if perfect else ""))
+        learn_write(username, p)
+        res["progress"] = learn_public(p)
+    return res
+
+
+# ---------- Beginner stock course --------------------------------------------
 COURSE = [
     {"t": "Welcome — what investing really is",
      "b": "Investing means putting money into assets that may grow or produce income over time. Unlike a savings deposit, market investments can lose value. This course builds the vocabulary and judgment to research before deciding."},
@@ -1931,11 +3393,12 @@ _GAME_NPCS = [
 
 
 def _today_utc() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%d")
+    # datetime.utcnow() is deprecated and slated for removal; gmtime is exact.
+    return time.strftime("%Y-%m-%d", time.gmtime())
 
 
 def _yesterday_utc() -> str:
-    return (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
 
 
 def _game_default() -> dict:
@@ -3109,6 +4572,41 @@ NOT FINANCIAL ADVICE.
         if path == "/api/course":
             return self._json({"lessons": COURSE, "count": len(COURSE)})
 
+        if path == "/api/titan/diagnostic":
+            # Questions come from the backend (without the answer key) so Titan,
+            # not the browser, decides what's correct. Sampled from a bigger bank
+            # so a retake isn't the same test again.
+            qs = titan_diagnostic_set()
+            return self._json({
+                "model": TITAN_VERSION,
+                "questions": [{"id": q["id"], "topic": q["topic"], "q": q["q"],
+                               "a": q["a"], "d": q.get("d", 1),
+                               "pts": int(q.get("d") or 1) * LEARN_PTS_PER_LEVEL}
+                              for q in qs],
+                "count": len(qs),
+                "bank": len(TITAN_DIAGNOSTIC),
+                "perfectBonus": LEARN_PTS_PERFECT,
+                "ai": bool(OPENAI_API_KEY),
+            })
+
+        if path == "/api/learn/progress":
+            # Points, rank, streaks and the whole catalog with progress folded in.
+            if not user:
+                return self._json({"auth": False, "ranks": [r[1] for r in LEARN_RANKS],
+                                   "categories": LEARN_CATEGORIES,
+                                   "library": learn_library_public(_learn_fresh())})
+            return self._json({"auth": True, **learn_public(learn_progress(user["username"]))})
+
+        if path == "/api/learn/course":
+            # One course's lessons. Check answers are stripped in learn_course_public.
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            cid = (q.get("id", [""])[0] or "").strip()
+            p = learn_progress(user["username"]) if user else _learn_fresh()
+            course = learn_course_public(p, cid)
+            if not course:
+                return self._json({"error": "no such course"}, 404)
+            return self._json({"auth": bool(user), **course})
+
         if path == "/api/paper":
             if not user:
                 return self._json({"auth": False, "start": PAPER_START_CASH})
@@ -3148,7 +4646,7 @@ NOT FINANCIAL ADVICE.
                         set_user_plan(user["username"], plan)
                         plan_name = PLANS[plan]["name"]
                         ok = True
-            title = f"Welcome to FAAM {plan_name} 🎉" if ok else "Couldn't confirm payment"
+            title = f"Welcome to FAAM {plan_name}" if ok else "Couldn't confirm payment"
             body = (
                 "Your subscription is active. You can close this tab and return to FAAM."
                 if ok else
@@ -3562,7 +5060,7 @@ NOT FINANCIAL ADVICE.
             # Billing is paused during the beta — everything's free. (The Stripe
             # code below stays intact for when we launch.)
             if BETA:
-                return self._json({"error": "FAAM is free while it's in beta — every feature is already unlocked. 🎉"})
+                return self._json({"error": "FAAM is free while it's in beta — every feature is already unlocked."})
             # Creates a Stripe Checkout subscription session. FAAM never sees the
             # card; Stripe hosts the payment page. We only get back a URL to open.
             body = self._read_json()
@@ -3744,6 +5242,11 @@ NOT FINANCIAL ADVICE.
             question = (body.get("question") or "").strip()
             if not question:
                 return self._json({"error": "ask a question"}, 400)
+            # Titan first: a cached/known answer costs nothing and returns instantly.
+            hit = titan_recall(question)
+            if hit:
+                return self._json({"text": hit["answer"], "source": "titan",
+                                   "from": hit.get("from")})
             if usage_blocked():
                 return self._json(USAGE_LIMIT_MSG, 402)
             result = openai_chat(
@@ -3758,7 +5261,10 @@ NOT FINANCIAL ADVICE.
             if "error" in result:
                 return self._json(result, 502)
             record_cost(chat_cost(result))
-            return self._json({"text": extract_text(result)})
+            text = extract_text(result)
+            _titan_bump("ai")
+            titan_learn(question, text)     # next person asking gets it free
+            return self._json({"text": text, "source": "ai"})
 
         if path == "/api/watchlist/add":
             body = self._read_json()
@@ -3934,6 +5440,54 @@ NOT FINANCIAL ADVICE.
                 return self._json({"error": "missing question"}, 400)
             titan_feedback(q, a, good)
             return self._json({"ok": True, **titan_stats()})
+
+        if path == "/api/titan/diagnostic/grade":
+            body = self._read_json()
+            answers = body.get("answers")
+            if not isinstance(answers, list) or not answers:
+                return self._json({"error": "no answers submitted"}, 400)
+            u = self._current_user()
+            # Signed in? Points are banked and the course is saved. Signed out
+            # still grades — you just don't keep the score.
+            return self._json(titan_evaluate_diagnostic(
+                answers[:60], (u or {}).get("username", "")))
+
+        if path == "/api/learn/lesson/read":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in to earn points."}, 401)
+            body = self._read_json()
+            try:
+                idx = int(body.get("i"))
+            except Exception:  # noqa: BLE001
+                return self._json({"error": "bad lesson"}, 400)
+            cid = (body.get("course") or PERSONAL_COURSE_ID).strip()
+            res = learn_lesson_read(u["username"], cid, idx)
+            return self._json(res, 200 if res.get("ok") else 400)
+
+        if path == "/api/learn/lesson/check":
+            # The check answer is graded here — the page never receives the key.
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in to earn points."}, 401)
+            body = self._read_json()
+            try:
+                idx, chosen = int(body.get("i")), int(body.get("chosen"))
+            except Exception:  # noqa: BLE001
+                return self._json({"error": "bad answer"}, 400)
+            cid = (body.get("course") or PERSONAL_COURSE_ID).strip()
+            res = learn_lesson_check(u["username"], cid, idx, chosen)
+            return self._json(res, 200 if res.get("ok") else 400)
+
+        if path == "/api/learn/review":
+            # End-of-unit review, graded here — the key never reaches the page.
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in to take the review."}, 401)
+            body = self._read_json()
+            cid = (body.get("course") or "").strip()
+            res = learn_review_submit(u["username"], cid, body.get("answers"))
+            return self._json(res, 200 if res.get("ok") else 400)
 
         if path == "/api/analyze":
             if usage_blocked():
