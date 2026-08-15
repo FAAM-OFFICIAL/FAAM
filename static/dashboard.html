@@ -504,6 +504,14 @@
       <!-- Daily learning streak -->
       <div class="learn-streak" id="learnStreak" hidden title="Days in a row you've learned something">
         <svg class="lst-flame" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M13.4 2.2c.3 2.5-.6 4.3-2.1 5.9-1.4 1.5-3.2 2.9-3.9 5.2-1 3.3.9 6.6 4.1 7.6 3.4 1.1 7-.8 8-4.2.9-2.9-.3-5.5-1.7-7.2-.2 1-.8 1.8-1.6 2.2.5-3.6-1.2-7-2.8-9.5zm-2 12.1c.9-.9 1.4-1.9 1.5-3.1.9.9 1.6 2.1 1.2 3.6-.3 1.2-1.6 2-2.8 1.6-1.1-.3-1.7-1.5-1.4-2.7.1-.5.4-.9.8-1.3z"/></svg><b id="lstDays">0</b>
+        <span class="lst-freeze" id="lstFreeze" hidden aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 2v20M4 7l16 10M20 7L4 17"/></svg><i id="lstFreezeN">0</i>
+        </span>
+      </div>
+      <!-- Points boost, shown only while one is running -->
+      <div class="learn-boost" id="learnBoost" hidden title="Points boost active">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>
+        <b id="lbBoostMult">2×</b><i id="lbBoostLeft"></i>
       </div>
       <!-- Points & rank: filled from /api/learn/progress, hidden until signed in -->
       <div class="learn-xp" id="learnXp" hidden>
@@ -571,6 +579,18 @@
               <div class="lib-stat"><b id="libStatLessons">0</b><span>lessons read</span></div>
               <div class="lib-stat"><b id="libStatCerts">0</b><span>certificates</span></div>
             </div>
+            <button type="button" class="lib-daily" id="libDaily" hidden>
+              <span class="ld-gift" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="18" height="12" rx="2"/><path d="M3 13h18M12 9v12"/><path d="M12 9S10.5 4 8 4a2.2 2.2 0 0 0 0 5M12 9s1.5-5 4-5a2.2 2.2 0 0 1 0 5"/></svg>
+              </span>
+              <span class="ld-txt"><b id="ldTitle">Daily reward</b><i id="ldSub">Claim +25 pts</i></span>
+            </button>
+
+            <button type="button" class="lib-lb-btn" id="libLbBtn">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M17 5h2a2 2 0 0 1 0 4h-2M7 5H5a2 2 0 0 0 0 4h2"/></svg>
+              Leaderboard
+            </button>
+
             <div class="lib-soon">
               <span class="lib-soon-tag">Coming soon</span>
               <p>Video courses and trading simulations are on the way.</p>
@@ -605,6 +625,25 @@
             <div class="lib-grid" id="libGrid"></div>
             <p class="lib-empty muted" id="libEmpty" hidden>No courses match that search.</p>
           </div>
+        </div>
+      </section>
+
+      <!-- LEADERBOARD -->
+      <section class="learn-view learn-wide" id="lvBoard" hidden>
+        <div class="board">
+          <button type="button" class="lib-back" id="lbBack">← All courses</button>
+          <header class="board-head">
+            <div>
+              <h1>Leaderboard</h1>
+              <p class="muted" id="lbSub">Ranked by points earned in FAAM Learn.</p>
+            </div>
+            <div class="board-you" id="lbYou" hidden>
+              <span class="by-place" id="lbYouPlace">—</span>
+              <div><b id="lbYouXp">0 pts</b><i id="lbYouRank">Rookie</i></div>
+            </div>
+          </header>
+          <ol class="board-list" id="lbList"></ol>
+          <p class="board-empty muted" id="lbEmpty" hidden>No one has earned points yet. Be the first.</p>
         </div>
       </section>
 

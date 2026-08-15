@@ -2350,6 +2350,16 @@ LEARN_PTS_COURSE = 150          # bonus for passing a course's end-of-unit revie
 LEARN_PTS_REVIEW = 15           # per correct answer in the review
 LEARN_PTS_ARTICLE = 40          # bonus for reading every section of an article
 LEARN_STREAK_BONUS = 15         # extra per check once you're on a 3+ run
+# Daily reward: grows with consecutive claims, with a boost every few days.
+LEARN_DAILY_BASE = 25
+LEARN_DAILY_STEP = 10
+LEARN_DAILY_STEPS = 7           # the reward stops growing after a week
+LEARN_DAILY_BOOST_EVERY = 3     # every 3rd claim also starts a boost
+LEARN_BOOST_MULT = 2            # points multiplier while a boost runs
+LEARN_BOOST_MINUTES = 30
+# Streak freezes: earned by passing a review, each covers one missed day.
+LEARN_FREEZE_MAX = 2
+LEARN_FREEZE_DAYS = 10          # a freeze expires 10 days after you earn it
 LEARN_RANKS = [
     (0, "Rookie"), (250, "Apprentice"), (600, "Analyst"),
     (1100, "Strategist"), (1800, "Titan Scholar"),
@@ -2379,6 +2389,7 @@ def _learn_fresh() -> dict:
     return {"xp": 0, "attempts": 0, "best": 0, "streak": 0, "bestStreak": 0,
             "courses": {}, "personal": [], "result": {}, "log": [],
             "day": "", "days": 0, "bestDays": 0, "certs": {},
+            "daily": {}, "boost": {}, "freezes": [],
             "created": int(time.time())}
 
 
@@ -2420,29 +2431,170 @@ def learn_write(username: str, p: dict) -> None:
     _save_json(LEARN_FILE, d)
 
 
-def learn_award(p: dict, points: int, why: str) -> int:
-    """Add points and record why, so the UI can show what was just earned."""
+def learn_award(p: dict, points: int, why: str, boosted: bool = True) -> int:
+    """Add points and record why, so the UI can show what was just earned.
+
+    An active boost multiplies what you earn. The daily reward itself passes
+    boosted=False, so claiming a boost can't also multiply the claim."""
     points = max(0, int(points))
+    mult = 1
+    if boosted and points:
+        b = p.get("boost") or {}
+        if int(b.get("until") or 0) > int(time.time()):
+            mult = max(1, int(b.get("mult") or 1))
+    points *= mult
     p["xp"] = max(0, int(p.get("xp") or 0)) + points
     if points:
-        p.setdefault("log", []).append({"pts": points, "why": why, "ts": int(time.time())})
+        entry = {"pts": points, "why": why, "ts": int(time.time())}
+        if mult > 1:
+            entry["mult"] = mult
+        p.setdefault("log", []).append(entry)
         p["log"] = p["log"][-40:]
     return points
 
 
-def learn_touch_day(p: dict) -> int:
-    """Daily learning streak. Same day = no change, yesterday = +1, older = reset."""
+def _utc_day(offset_days: int = 0) -> str:
     # time.gmtime avoids datetime.utcnow(), which is deprecated and slated for
     # removal; both give the same UTC calendar day.
-    today = time.strftime("%Y-%m-%d", time.gmtime())
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() + offset_days * 86400))
+
+
+def _days_between(a: str, b: str) -> int:
+    """Whole days from day-string a to day-string b (0 if either is missing)."""
+    try:
+        ta = time.mktime(time.strptime(a, "%Y-%m-%d"))
+        tb = time.mktime(time.strptime(b, "%Y-%m-%d"))
+        return int(round((tb - ta) / 86400))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def learn_prune_freezes(p: dict) -> list:
+    """Drop freezes past their expiry and return what's still usable."""
+    now = int(time.time())
+    live = [int(t) for t in (p.get("freezes") or []) if int(t) > now]
+    live.sort()
+    p["freezes"] = live[:LEARN_FREEZE_MAX]
+    return p["freezes"]
+
+
+def learn_grant_freeze(p: dict) -> bool:
+    """Earned by passing a review. Capped, and each one expires on its own."""
+    live = learn_prune_freezes(p)
+    if len(live) >= LEARN_FREEZE_MAX:
+        return False
+    p["freezes"] = sorted(live + [int(time.time()) + LEARN_FREEZE_DAYS * 86400])
+    return True
+
+
+def learn_touch_day(p: dict) -> int:
+    """Daily learning streak.
+
+    Same day = no change, yesterday = +1. A longer gap normally resets you to 1,
+    but a held streak freeze covers one missed day each — so two freezes can
+    bridge a two-day absence. Freezes are spent oldest-first and are gone once
+    used, which is what makes them worth earning."""
+    today = _utc_day()
     last = p.get("day") or ""
     if last == today:
         return 0
-    yesterday = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
-    p["days"] = (int(p.get("days") or 0) + 1) if last == yesterday else 1
+
+    gap = _days_between(last, today) if last else 0
+    if last and gap > 1:
+        missed = gap - 1
+        live = learn_prune_freezes(p)
+        if missed <= len(live):
+            del p["freezes"][:missed]          # oldest-first
+            p["frozeOn"] = today
+            p["days"] = int(p.get("days") or 0) + 1
+        else:
+            p["days"] = 1
+    else:
+        p["days"] = (int(p.get("days") or 0) + 1) if last == _utc_day(-1) else 1
+
     p["day"] = today
     p["bestDays"] = max(int(p.get("bestDays") or 0), p["days"])
     return p["days"]
+
+
+# ---------- Daily reward ------------------------------------------------------
+def learn_daily_state(p: dict) -> dict:
+    """What today's reward is worth, and whether it's still on the table."""
+    daily = p.get("daily") or {}
+    claimed_today = (daily.get("day") or "") == _utc_day()
+    # The run grows with consecutive claims, but a missed day starts it over.
+    run = int(daily.get("run") or 0)
+    if daily.get("day") and _days_between(daily["day"], _utc_day()) > 1:
+        run = 0
+    step = min(run, LEARN_DAILY_STEPS - 1)
+    points = LEARN_DAILY_BASE + step * LEARN_DAILY_STEP
+    boost_day = (run + 1) % LEARN_DAILY_BOOST_EVERY == 0
+    return {
+        "claimed": claimed_today,
+        "run": run,
+        "points": points,
+        "boost": boost_day,
+        "boostMult": LEARN_BOOST_MULT,
+        "boostMins": LEARN_BOOST_MINUTES,
+        "nextBoostIn": (LEARN_DAILY_BOOST_EVERY - ((run + 1) % LEARN_DAILY_BOOST_EVERY)
+                        % LEARN_DAILY_BOOST_EVERY),
+    }
+
+
+def learn_boost_state(p: dict) -> dict:
+    b = p.get("boost") or {}
+    until = int(b.get("until") or 0)
+    left = max(0, until - int(time.time()))
+    return {"active": left > 0, "secondsLeft": left,
+            "mult": int(b.get("mult") or LEARN_BOOST_MULT) if left > 0 else 1}
+
+
+def learn_claim_daily(username: str) -> dict:
+    """Claim today's reward. Once per UTC day, graded and stored server-side."""
+    with _LEARN_LOCK:
+        p = learn_progress(username)
+        state = learn_daily_state(p)
+        if state["claimed"]:
+            return {"error": "You've already claimed today. Come back tomorrow."}
+
+        run = state["run"] + 1
+        p["daily"] = {"day": _utc_day(), "run": run}
+        gained = learn_award(p, state["points"], f"Daily reward (day {run})",
+                             boosted=False)
+        boosted = False
+        if state["boost"]:
+            p["boost"] = {"until": int(time.time()) + LEARN_BOOST_MINUTES * 60,
+                          "mult": LEARN_BOOST_MULT}
+            boosted = True
+        learn_touch_day(p)
+        learn_write(username, p)
+        return {"ok": True, "gained": gained, "run": run, "boostStarted": boosted,
+                **learn_public(p)}
+
+
+# ---------- Leaderboard -------------------------------------------------------
+def learn_leaderboard(username: str = "", limit: int = 50) -> dict:
+    """Everyone who has earned points, ranked. Usernames only — no emails."""
+    data = _load_json(LEARN_FILE, {})
+    rows = []
+    for name, rec in (data.items() if isinstance(data, dict) else []):
+        if not isinstance(rec, dict):
+            continue
+        xp = int(rec.get("xp") or 0)
+        if xp <= 0:
+            continue
+        rows.append({
+            "name": name,
+            "xp": xp,
+            "rank": learn_rank(xp)["name"],
+            "days": int(rec.get("days") or 0),
+            "certs": len(rec.get("certs") or {}),
+        })
+    rows.sort(key=lambda r: (-r["xp"], r["name"]))
+    for i, r in enumerate(rows, 1):
+        r["place"] = i
+    me = next((r for r in rows if r["name"] == username), None)
+    return {"top": rows[:limit], "you": me, "players": len(rows)}
 
 
 def learn_lessons_of(p: dict, course_id: str) -> list:
@@ -2528,6 +2680,12 @@ def learn_public(p: dict) -> dict:
         "bestStreak": int(p.get("bestStreak") or 0),
         "days": int(p.get("days") or 0),
         "bestDays": int(p.get("bestDays") or 0),
+        "freezes": len(learn_prune_freezes(p)),
+        "freezeMax": LEARN_FREEZE_MAX,
+        "freezeExpiry": learn_prune_freezes(p),
+        "frozeOn": p.get("frozeOn") or "",
+        "daily": learn_daily_state(p),
+        "boost": learn_boost_state(p),
         "attempts": int(p.get("attempts") or 0),
         "best": int(p.get("best") or 0),
         "categories": LEARN_CATEGORIES,
@@ -2655,17 +2813,21 @@ def learn_review_submit(username: str, course_id: str, answers: list) -> dict:
             gained += learn_award(p, delta * LEARN_PTS_REVIEW,
                                   f"Review: {score}/{len(review)}")
             rev["best"] = score
+        froze = False
         if first_pass:
             rev["passed"] = True
             meta = learn_course(course_id)
             title = meta["title"] if meta else "your course"
             gained += learn_award(p, LEARN_PTS_COURSE, f"Passed review: {title}")
             (p.setdefault("certs", {}))[course_id] = int(time.time())
+            # Passing a review also earns a streak freeze, up to the cap.
+            froze = learn_grant_freeze(p)
         rev["pts"] = int(rev.get("pts") or 0) + gained
         learn_write(username, p)
         return {"ok": True, "score": score, "total": len(review), "passed": passed,
                 "pass": REVIEW_PASS, "firstPass": first_pass, "detail": detail,
-                "gained": gained, "course": learn_course_public(p, course_id),
+                "gained": gained, "freezeEarned": froze,
+                "course": learn_course_public(p, course_id),
                 **learn_public(p)}
 
 
@@ -4513,6 +4675,10 @@ NOT FINANCIAL ADVICE.
                                    "library": learn_library_public(_learn_fresh())})
             return self._json({"auth": True, **learn_public(learn_progress(user["username"]))})
 
+        if path == "/api/learn/leaderboard":
+            # Usernames and points only — never emails or any holdings.
+            return self._json(learn_leaderboard((user or {}).get("username", "")))
+
         if path == "/api/learn/course":
             # One course's lessons. Check answers are stripped in learn_course_public.
             q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
@@ -5410,6 +5576,13 @@ NOT FINANCIAL ADVICE.
                 return self._json({"error": "bad answer"}, 400)
             cid = (body.get("course") or PERSONAL_COURSE_ID).strip()
             res = learn_lesson_check(u["username"], cid, idx, chosen)
+            return self._json(res, 200 if res.get("ok") else 400)
+
+        if path == "/api/learn/daily":
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in to claim your daily reward."}, 401)
+            res = learn_claim_daily(u["username"])
             return self._json(res, 200 if res.get("ok") else 400)
 
         if path == "/api/learn/review":

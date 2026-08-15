@@ -2030,7 +2030,7 @@ function renderScreenResults(data) {
 /* ---------- FAAM Learn — full-screen hub, powered by Titan ----------
    The placement test is served AND graded by the backend, so Titan decides what
    you know and writes the course. The browser only collects answers. */
-const LEARN_VIEWS = ["lvIntro", "lvHome", "lvCourse", "lvQuiz", "lvGrading", "lvResults", "lvReview"];
+const LEARN_VIEWS = ["lvIntro", "lvHome", "lvBoard", "lvCourse", "lvQuiz", "lvGrading", "lvResults", "lvReview"];
 let learnDiag = { questions: [], idx: 0, answers: {}, result: null, lessonIdx: 0 };
 // Points, rank and course progress — the backend owns all of it, this is a mirror.
 let learnProg = null;
@@ -2262,6 +2262,121 @@ function renderLearnXp() {
     stk.hidden = days <= 0;
     $("#lstDays").textContent = days;
     stk.title = `${days} day${days === 1 ? "" : "s"} in a row · best ${learnProg.bestDays || days}`;
+    // Held streak freezes ride along on the chip.
+    const fz = $("#lstFreeze"), n = learnProg.freezes || 0;
+    if (fz) {
+      fz.hidden = n <= 0;
+      $("#lstFreezeN").textContent = n;
+      fz.title = `${n} streak freeze${n === 1 ? "" : "s"} — each covers one missed day`;
+    }
+  }
+  renderBoost();
+  renderDailyButton();
+}
+
+/* Boost pill, with a live countdown while one is running. */
+let boostTimer = null;
+function renderBoost() {
+  const box = $("#learnBoost");
+  if (!box) return;
+  const b = (learnProg || {}).boost || {};
+  if (!b.active) {
+    box.hidden = true;
+    if (boostTimer) { clearInterval(boostTimer); boostTimer = null; }
+    return;
+  }
+  box.hidden = false;
+  $("#lbBoostMult").textContent = `${b.mult}×`;
+  let left = b.secondsLeft;
+  const paint = () => {
+    if (left <= 0) {
+      box.hidden = true;
+      clearInterval(boostTimer); boostTimer = null;
+      if (learnProg && learnProg.boost) learnProg.boost.active = false;
+      return;
+    }
+    const m = Math.floor(left / 60), s = left % 60;
+    $("#lbBoostLeft").textContent = m > 0 ? `${m}m` : `${s}s`;
+    left--;
+  };
+  paint();
+  if (boostTimer) clearInterval(boostTimer);
+  boostTimer = setInterval(paint, 1000);
+}
+
+/* Daily reward button — hidden once today's is claimed. */
+function renderDailyButton() {
+  const btn = $("#libDaily");
+  if (!btn) return;
+  const d = (learnProg || {}).daily;
+  if (!learnProg || !d) { btn.hidden = true; return; }
+  btn.hidden = !!d.claimed;
+  if (d.claimed) return;
+  $("#ldTitle").textContent = d.run > 0 ? `Day ${d.run + 1} reward` : "Daily reward";
+  $("#ldSub").textContent = d.boost
+    ? `Claim +${d.points} pts and a ${d.boostMult}× boost`
+    : `Claim +${d.points} pts`;
+  btn.classList.toggle("boosty", !!d.boost);
+}
+
+async function claimDailyReward() {
+  const btn = $("#libDaily");
+  if (btn) btn.disabled = true;
+  try {
+    const d = await (await fetch("/api/learn/daily", { method: "POST" })).json();
+    if (d.error) { toast(d.error); return; }
+    learnProg = d;
+    renderLearnXp();
+    renderLearnLibrary();
+    learnFloatPoints(d.gained);
+    toast(d.boostStarted
+      ? `+${d.gained} pts · ${d.boost.mult}× boost for ${learnProg.daily.boostMins} minutes`
+      : `+${d.gained} pts — day ${d.run}`);
+  } catch {
+    toast("Couldn't claim that. Try again.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* ---------- Leaderboard ---------- */
+async function openLeaderboard() {
+  learnView("lvBoard");
+  const list = $("#lbList");
+  list.innerHTML = "";
+  try {
+    const d = await (await fetch("/api/learn/leaderboard")).json();
+    $("#lbSub").textContent = d.players === 1
+      ? "Ranked by points earned in FAAM Learn. 1 player so far."
+      : `Ranked by points earned in FAAM Learn. ${d.players} players.`;
+    $("#lbEmpty").hidden = (d.top || []).length > 0;
+
+    const you = d.you;
+    const box = $("#lbYou");
+    box.hidden = !you;
+    if (you) {
+      $("#lbYouPlace").textContent = `#${you.place}`;
+      $("#lbYouXp").textContent = `${you.xp.toLocaleString()} pts`;
+      $("#lbYouRank").textContent = you.rank;
+    }
+
+    (d.top || []).forEach((r) => {
+      const li = document.createElement("li");
+      const mine = you && r.name === you.name;
+      li.className = "board-row" + (mine ? " me" : "") + (r.place <= 3 ? " podium" : "");
+      li.innerHTML = `<span class="br-place"></span>
+        <div class="br-who"><b></b><i></i></div>
+        <span class="br-xp"></span>`;
+      li.querySelector(".br-place").textContent = r.place;
+      li.querySelector("b").textContent = r.name + (mine ? " (you)" : "");
+      li.querySelector("i").textContent =
+        `${r.rank}${r.days ? ` · ${r.days}-day streak` : ""}${r.certs ? ` · ${r.certs} certificate${r.certs === 1 ? "" : "s"}` : ""}`;
+      li.querySelector(".br-xp").textContent = `${r.xp.toLocaleString()} pts`;
+      list.appendChild(li);
+    });
+  } catch {
+    toast("Couldn't load the leaderboard.");
+    learnView("lvHome");
   }
 }
 
@@ -2849,6 +2964,7 @@ async function reviewNext() {
     if (d.error) throw new Error(d.error);
     learnReview.result = d;
     learnApplyCourse(d, d.passed ? "review passed" : "");
+    if (d.freezeEarned) toast("Streak freeze earned — it covers one missed day.");
     renderReviewResult(d);
   } catch (e) {
     toast("Couldn't submit the review. Try again.");
@@ -4495,6 +4611,9 @@ function wire() {
   $("#learnBtn")?.addEventListener("click", openLearn);
   $("#closeLearn")?.addEventListener("click", () => $("#learnDialog").close());
   $("#obSkip")?.addEventListener("click", obAbort);
+  $("#libDaily")?.addEventListener("click", claimDailyReward);
+  $("#libLbBtn")?.addEventListener("click", openLeaderboard);
+  $("#lbBack")?.addEventListener("click", () => { renderLearnLibrary(); learnView("lvHome"); });
   $("#learnStartDiag")?.addEventListener("click", learnStartDiagnostic);
   $("#lqBack")?.addEventListener("click", () => { if (learnDiag.idx > 0) { learnDiag.idx--; renderLearnQuestion(); } });
   $("#lqNext")?.addEventListener("click", learnQuizNext);

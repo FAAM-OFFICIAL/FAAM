@@ -625,3 +625,197 @@ class TestConcurrentWrites(LearnTestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ---------------------------------------------------- rewards & leaderboard ----
+class TestDailyReward(LearnTestCase):
+
+    def test_first_claim_pays_the_base(self):
+        u = self.user("d1")
+        r = self.m.learn_claim_daily(u)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["gained"], self.m.LEARN_DAILY_BASE)
+
+    def test_cannot_claim_twice_in_a_day(self):
+        u = self.user("d2")
+        self.m.learn_claim_daily(u)
+        self.assertIn("error", self.m.learn_claim_daily(u))
+
+    def test_reward_grows_on_consecutive_days(self):
+        u = self.user("d3")
+        seen = []
+        for run in range(4):
+            p = self.m.learn_progress(u)
+            if run:
+                p["daily"] = {"day": self.m._utc_day(-1), "run": run}
+                self.m.learn_write(u, p)
+            seen.append(self.m.learn_claim_daily(u)["gained"])
+        self.assertEqual(seen[0], self.m.LEARN_DAILY_BASE)
+        for a, b in zip(seen, seen[1:]):
+            self.assertGreater(b, a, "each consecutive day should pay more")
+
+    def test_reward_stops_growing_at_the_cap(self):
+        u = self.user("d4")
+        p = self.m.learn_progress(u)
+        p["daily"] = {"day": self.m._utc_day(-1), "run": 50}
+        self.m.learn_write(u, p)
+        gained = self.m.learn_claim_daily(u)["gained"]
+        cap = self.m.LEARN_DAILY_BASE + (self.m.LEARN_DAILY_STEPS - 1) * self.m.LEARN_DAILY_STEP
+        self.assertEqual(gained, cap)
+
+    def test_a_missed_day_restarts_the_run(self):
+        u = self.user("d5")
+        p = self.m.learn_progress(u)
+        p["daily"] = {"day": self.m._utc_day(-5), "run": 6}
+        self.m.learn_write(u, p)
+        self.assertEqual(self.m.learn_claim_daily(u)["gained"], self.m.LEARN_DAILY_BASE)
+
+    def test_boost_arrives_on_schedule(self):
+        u = self.user("d6")
+        p = self.m.learn_progress(u)
+        p["daily"] = {"day": self.m._utc_day(-1),
+                      "run": self.m.LEARN_DAILY_BOOST_EVERY - 1}
+        self.m.learn_write(u, p)
+        r = self.m.learn_claim_daily(u)
+        self.assertTrue(r["boostStarted"])
+        self.assertTrue(r["boost"]["active"])
+        self.assertEqual(r["boost"]["mult"], self.m.LEARN_BOOST_MULT)
+
+
+class TestBoost(LearnTestCase):
+
+    def test_boost_multiplies_awards(self):
+        p = self.m._learn_fresh()
+        p["boost"] = {"until": int(__import__("time").time()) + 600,
+                      "mult": self.m.LEARN_BOOST_MULT}
+        self.assertEqual(self.m.learn_award(p, 50, "x"), 50 * self.m.LEARN_BOOST_MULT)
+
+    def test_expired_boost_does_not_multiply(self):
+        p = self.m._learn_fresh()
+        p["boost"] = {"until": int(__import__("time").time()) - 5, "mult": 2}
+        self.assertEqual(self.m.learn_award(p, 50, "x"), 50)
+
+    def test_claiming_the_boost_does_not_multiply_the_claim(self):
+        """Otherwise the boost would pay for itself the moment it started."""
+        u = self.user("b3")
+        p = self.m.learn_progress(u)
+        p["daily"] = {"day": self.m._utc_day(-1),
+                      "run": self.m.LEARN_DAILY_BOOST_EVERY - 1}
+        self.m.learn_write(u, p)
+        r = self.m.learn_claim_daily(u)
+        expected = self.m.LEARN_DAILY_BASE + min(
+            self.m.LEARN_DAILY_BOOST_EVERY - 1,
+            self.m.LEARN_DAILY_STEPS - 1) * self.m.LEARN_DAILY_STEP
+        self.assertEqual(r["gained"], expected, "the claim itself must not be boosted")
+
+
+class TestStreakFreeze(LearnTestCase):
+    COURSE = "stocks-101"
+
+    def pass_review(self, u, course):
+        for i in range(len(self.m.LEARN_COURSES[course]["lessons"])):
+            self.m.learn_lesson_read(u, course, i)
+        return self.m.learn_review_submit(
+            u, course, [q["c"] for q in self.m.course_review(course)])
+
+    def test_passing_a_review_earns_a_freeze(self):
+        u = self.user("f1")
+        r = self.pass_review(u, self.COURSE)
+        self.assertTrue(r["freezeEarned"])
+        self.assertEqual(r["freezes"], 1)
+
+    def test_freezes_are_capped(self):
+        u = self.user("f2")
+        earned = [self.pass_review(u, c)["freezeEarned"]
+                  for c in ("stocks-101", "stocks-orders", "stocks-charts", "risk-101")]
+        self.assertEqual(sum(1 for e in earned if e), self.m.LEARN_FREEZE_MAX)
+        self.assertEqual(len(self.m.learn_prune_freezes(self.m.learn_progress(u))),
+                         self.m.LEARN_FREEZE_MAX)
+
+    def test_a_freeze_covers_one_missed_day(self):
+        u = self.user("f3")
+        self.pass_review(u, self.COURSE)
+        p = self.m.learn_progress(u)
+        p["day"], p["days"] = self.m._utc_day(-2), 9      # skipped yesterday
+        self.m.learn_write(u, p)
+        p = self.m.learn_progress(u)
+        self.m.learn_touch_day(p)
+        self.assertEqual(p["days"], 10, "the streak should have survived")
+        self.assertEqual(len(p["freezes"]), 0, "the freeze should have been spent")
+
+    def test_streak_resets_when_freezes_run_out(self):
+        u = self.user("f4")
+        self.pass_review(u, self.COURSE)                   # exactly one freeze
+        p = self.m.learn_progress(u)
+        p["day"], p["days"] = self.m._utc_day(-4), 12      # three missed days
+        self.m.learn_write(u, p)
+        p = self.m.learn_progress(u)
+        self.m.learn_touch_day(p)
+        self.assertEqual(p["days"], 1, "one freeze cannot cover three days")
+        self.assertEqual(len(p["freezes"]), 1, "and it should not have been spent")
+
+    def test_expired_freezes_are_not_usable(self):
+        p = self.m._learn_fresh()
+        import time as _t
+        p["freezes"] = [int(_t.time()) - 1, int(_t.time()) + 86400]
+        self.assertEqual(len(self.m.learn_prune_freezes(p)), 1)
+
+    def test_a_freeze_expires_after_the_stated_window(self):
+        p = self.m._learn_fresh()
+        import time as _t
+        self.m.learn_grant_freeze(p)
+        life_days = (p["freezes"][0] - int(_t.time())) / 86400
+        self.assertAlmostEqual(life_days, self.m.LEARN_FREEZE_DAYS, delta=0.01)
+
+    def test_no_freeze_is_spent_on_an_unbroken_streak(self):
+        u = self.user("f7")
+        self.pass_review(u, self.COURSE)
+        p = self.m.learn_progress(u)
+        p["day"], p["days"] = self.m._utc_day(-1), 4
+        self.m.learn_write(u, p)
+        p = self.m.learn_progress(u)
+        self.m.learn_touch_day(p)
+        self.assertEqual(p["days"], 5)
+        self.assertEqual(len(p["freezes"]), 1, "yesterday counts — nothing to cover")
+
+
+class TestLeaderboard(LearnTestCase):
+
+    def seed(self):
+        for name, xp in (("lb-jo", 2100), ("lb-ak", 1240), ("lb-sam", 890), ("lb-zero", 0)):
+            p = self.m.learn_progress(name)
+            p["xp"] = xp
+            self.m.learn_write(name, p)
+
+    def test_ranks_by_points_descending(self):
+        self.seed()
+        top = self.m.learn_leaderboard("lb-ak")["top"]
+        names = [r["name"] for r in top if r["name"].startswith("lb-")]
+        self.assertEqual(names[:3], ["lb-jo", "lb-ak", "lb-sam"])
+
+    def test_places_are_sequential(self):
+        self.seed()
+        top = self.m.learn_leaderboard()["top"]
+        self.assertEqual([r["place"] for r in top], list(range(1, len(top) + 1)))
+
+    def test_players_with_no_points_are_excluded(self):
+        self.seed()
+        names = [r["name"] for r in self.m.learn_leaderboard()["top"]]
+        self.assertNotIn("lb-zero", names)
+
+    def test_your_own_row_is_returned(self):
+        self.seed()
+        you = self.m.learn_leaderboard("lb-ak")["you"]
+        self.assertEqual(you["name"], "lb-ak")
+        self.assertEqual(you["xp"], 1240)
+
+    def test_no_row_for_a_stranger(self):
+        self.seed()
+        self.assertIsNone(self.m.learn_leaderboard("not-a-player")["you"])
+
+    def test_only_public_fields_are_exposed(self):
+        """A leaderboard must never leak emails or holdings."""
+        self.seed()
+        allowed = {"name", "xp", "rank", "days", "certs", "place"}
+        for row in self.m.learn_leaderboard()["top"]:
+            self.assertEqual(set(row) - allowed, set())

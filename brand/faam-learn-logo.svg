@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 288" width="1120" height="288">
+  <title>FAAM Learn — horizontal lockup</title>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4f8cff"/>
+      <stop offset="100%" stop-color="#7c5cff"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity=".16"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Mark -->
+  <g transform="translate(24 24)">
+    <rect width="240" height="240" rx="54" fill="url(#g)"/>
+    <rect width="240" height="240" rx="54" fill="url(#sheen)"/>
+    <g transform="translate(120 123) scale(7.3) translate(-12 -12)">
+      <path fill="#ffffff"
+            d="M12 3 1 9l11 6 9-4.9V17h2V9L12 3zM5 13.2V17l7 3.8 7-3.8v-3.8l-7 3.8-7-3.8z"/>
+    </g>
+  </g>
+
+  <!-- Wordmark: FAAM solid, Learn in the brand gradient.
+       One <text> with tspans, so the second word flows from the first instead
+       of being positioned by hand — a hardcoded x collides the moment the font
+       falls back to something with different metrics. -->
+  <text x="308" y="180"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="128" font-weight="800" letter-spacing="-4">
+    <tspan fill="#0B1220">FAAM</tspan><tspan dx="26" fill="url(#g)">Learn</tspan>
+  </text>
+</svg>
