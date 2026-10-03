@@ -1801,6 +1801,263 @@ function coachNext() {
 }
 function coachPrev() { if (coachI > 0) { coachI--; renderCoach(); } }
 
+/* ---------- The FAAM Stock Paper ----------
+   FAAM's announcement board. The FAAM (admin) account publishes; everyone signed
+   in can read and comment. Every piece of user text goes in via textContent —
+   never innerHTML — so a comment can't inject markup. */
+const SP_SEEN_KEY = "faam.stockpaper.seen";
+let spState = { posts: [], canPost: false, kinds: [], current: null, busy: false };
+
+function spDate(ts) {
+  return new Date((ts || 0) * 1000).toLocaleDateString(undefined,
+    { month: "short", day: "numeric", year: "numeric" });
+}
+
+function spView(id) {
+  ["spFront", "spStory"].forEach((v) => { $("#" + v).hidden = v !== id; });
+  $("#spBack").hidden = id !== "spStory";
+  $(".sp-body").scrollTop = 0;
+}
+
+/* Body text -> paragraphs, built as text nodes. */
+function spParagraphs(el, text) {
+  el.innerHTML = "";
+  String(text || "").split(/\n\s*\n/).forEach((para) => {
+    const p = document.createElement("p");
+    p.textContent = para.trim();
+    if (p.textContent) el.appendChild(p);
+  });
+}
+
+function spTickerChips(el, tickers) {
+  el.innerHTML = "";
+  (tickers || []).forEach((t) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "sp-tick";
+    b.textContent = "$" + t;
+    b.title = `Open ${t} on the dashboard`;
+    b.addEventListener("click", () => {
+      $("#paperDialogSP").close();
+      selectStock(t);
+    });
+    el.appendChild(b);
+  });
+  el.hidden = !(tickers || []).length;
+}
+
+async function openStockPaper(postId) {
+  const d = $("#paperDialogSP");
+  if (!d) return;
+  if (!d.open) d.showModal();
+  $("#spDate").textContent = new Date().toLocaleDateString(undefined,
+    { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  await loadStockPaper();
+  if (postId) openStory(postId); else spView("spFront");
+}
+
+async function loadStockPaper() {
+  try {
+    const r = await fetch("/api/stockpaper");
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    spState.posts = d.posts || [];
+    spState.canPost = !!d.canPost;
+    spState.kinds = d.kinds || [];
+  } catch (e) {
+    spState.posts = [];
+    toast("Couldn't load the Stock Paper.");
+  }
+  renderStockPaper();
+  // Everything on the front page has now been seen.
+  const newest = Math.max(0, ...spState.posts.map((p) => p.ts || 0));
+  try { localStorage.setItem(SP_SEEN_KEY, String(newest)); } catch { /* private mode */ }
+  $("#paperDot").hidden = true;
+}
+
+function renderStockPaper() {
+  // Composer, for FAAM only (the server enforces this too).
+  const comp = $("#spCompose");
+  comp.hidden = !spState.canPost;
+  const sel = $("#spKind");
+  if (spState.canPost && !sel.options.length) {
+    spState.kinds.forEach((k) => sel.add(new Option(k, k)));
+  }
+
+  const list = $("#spList");
+  list.innerHTML = "";
+  $("#spEmpty").hidden = spState.posts.length > 0;
+  spState.posts.forEach((p, i) => {
+    const a = document.createElement("article");
+    a.className = "sp-card" + (i === 0 && !p.pinned ? " lead" : "") + (p.pinned ? " pinned" : "");
+    a.innerHTML = `<p class="sp-kicker"></p><h2></h2><p class="sp-excerpt"></p>
+      <p class="sp-meta"><span class="sp-when"></span><span class="sp-ccount"></span></p>`;
+    a.querySelector(".sp-kicker").textContent = (p.pinned ? "Pinned · " : "") + p.kind;
+    a.querySelector("h2").textContent = p.title;
+    a.querySelector(".sp-excerpt").textContent = p.body;
+    a.querySelector(".sp-when").textContent = `FAAM · ${spDate(p.ts)}`;
+    a.querySelector(".sp-ccount").textContent =
+      p.comments === 1 ? "1 comment" : `${p.comments} comments`;
+    a.tabIndex = 0;
+    a.addEventListener("click", () => openStory(p.id));
+    a.addEventListener("keydown", (e) => { if (e.key === "Enter") openStory(p.id); });
+    list.appendChild(a);
+  });
+}
+
+async function openStory(id) {
+  try {
+    const r = await fetch(`/api/stockpaper/post?id=${encodeURIComponent(id)}`);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    spState.current = d;
+    renderStory();
+    spView("spStory");
+  } catch (e) {
+    toast(e.message || "Couldn't open that story.");
+  }
+}
+
+function renderStory() {
+  const p = spState.current;
+  if (!p) return;
+  $("#spStoryKind").textContent = p.kind;
+  $("#spStoryTitle").textContent = p.title;
+  $("#spStoryDate").textContent = spDate(p.ts);
+  spTickerChips($("#spStoryTickers"), p.tickers);
+  spParagraphs($("#spStoryBody"), p.body);
+  $("#spDeletePost").hidden = !p.canPost;
+
+  const cs = p.commentList || [];
+  $("#spCommentsH").textContent = cs.length ? `Comments (${cs.length})` : "Comments";
+  const list = $("#spCommentList");
+  list.innerHTML = "";
+  if (!cs.length) {
+    const e = document.createElement("p");
+    e.className = "muted small";
+    e.textContent = "No comments yet. Start the conversation.";
+    list.appendChild(e);
+  }
+  cs.forEach((c) => {
+    const row = document.createElement("div");
+    row.className = "sp-c" + (c.staff ? " staff" : "");
+    row.innerHTML = `<div class="sp-c-h"><b></b><span class="sp-c-when"></span></div><p></p>`;
+    row.querySelector("b").textContent = c.staff ? "FAAM" : c.user;
+    if (c.staff) {
+      const badge = document.createElement("span");
+      badge.className = "sp-staff";
+      badge.textContent = "Staff";
+      row.querySelector(".sp-c-h").insertBefore(badge, row.querySelector(".sp-c-when"));
+    }
+    row.querySelector(".sp-c-when").textContent = relTime(c.ts) || "just now";
+    row.querySelector("p").textContent = c.body;
+    if (c.canDelete) {
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "sp-c-del";
+      del.textContent = "Delete";
+      del.addEventListener("click", () => deleteComment(c.id));
+      row.querySelector(".sp-c-h").appendChild(del);
+    }
+    list.appendChild(row);
+  });
+}
+
+async function spPost(path, body) {
+  const r = await fetch(path, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.error) throw new Error(d.error || "Something went wrong.");
+  return d;
+}
+
+async function publishStory(e) {
+  e.preventDefault();
+  if (spState.busy) return;
+  spState.busy = true;
+  const btn = $("#spPublish"), err = $("#spComposeErr");
+  btn.disabled = true; err.textContent = "";
+  try {
+    await spPost("/api/stockpaper/post", {
+      title: $("#spTitle").value, body: $("#spText").value, kind: $("#spKind").value,
+      tickers: $("#spTickers").value, pinned: $("#spPinned").checked,
+    });
+    $("#spCompose").reset();
+    toast("Published to the Stock Paper.");
+    await loadStockPaper();
+  } catch (ex) {
+    err.textContent = ex.message;
+  } finally {
+    btn.disabled = false; spState.busy = false;
+  }
+}
+
+async function sendComment(e) {
+  e.preventDefault();
+  const p = spState.current;
+  if (!p || spState.busy) return;
+  spState.busy = true;
+  const btn = $("#spCommentSend"), err = $("#spCommentErr");
+  btn.disabled = true; err.textContent = "";
+  try {
+    const d = await spPost("/api/stockpaper/comment", { id: p.id, body: $("#spCommentText").value });
+    spState.current = { ...d.post, canPost: p.canPost };
+    $("#spCommentText").value = "";
+    renderStory();
+  } catch (ex) {
+    err.textContent = ex.message;
+  } finally {
+    btn.disabled = false; spState.busy = false;
+  }
+}
+
+async function deleteComment(cid) {
+  const p = spState.current;
+  if (!p || !confirm("Delete this comment?")) return;
+  try {
+    const d = await spPost("/api/stockpaper/comment/delete", { id: p.id, cid });
+    spState.current = { ...d.post, canPost: p.canPost };
+    renderStory();
+  } catch (ex) { toast(ex.message); }
+}
+
+async function deleteStory() {
+  const p = spState.current;
+  if (!p || !confirm("Delete this story and all its comments? This can't be undone.")) return;
+  try {
+    await spPost("/api/stockpaper/delete", { id: p.id });
+    toast("Story deleted.");
+    await loadStockPaper();
+    spView("spFront");
+  } catch (ex) { toast(ex.message); }
+}
+
+/* Loading-screen promo + the "new story" dot on the top-bar button. */
+async function loadPaperTeaser() {
+  try {
+    const d = await (await fetch("/api/stockpaper/latest")).json();
+    const latest = d.latest;
+    let seen = 0;
+    try { seen = Number(localStorage.getItem(SP_SEEN_KEY) || 0); } catch { /* ignore */ }
+    const isNew = !!latest && latest.ts > seen;
+    $("#paperDot").hidden = !isNew;
+
+    const promo = $("#bootPaper");
+    if (!promo) return;                      // splash already gone
+    $("#bootPaperKicker").textContent = latest
+      ? (isNew ? `New · ${latest.kind}` : latest.kind) : "New in FAAM";
+    $("#bootPaperHead").textContent = latest
+      ? latest.title : "Market notes and announcements, straight from FAAM.";
+    promo.hidden = false;
+    promo.onclick = () => {
+      if (typeof dismissBoot === "function") dismissBoot();
+      openStockPaper(latest ? latest.id : null);
+    };
+  } catch { /* the promo is optional; never block loading */ }
+}
+
 /* ---------- Portfolio ---------- */
 async function loadPortfolio() {
   try {
@@ -4609,6 +4866,13 @@ function wire() {
 
   // FAAM Learn (full screen, Titan-powered)
   $("#learnBtn")?.addEventListener("click", openLearn);
+  // The FAAM Stock Paper
+  $("#paperBtn")?.addEventListener("click", () => openStockPaper());
+  $("#closePaperSP")?.addEventListener("click", () => $("#paperDialogSP").close());
+  $("#spBack")?.addEventListener("click", () => { renderStockPaper(); spView("spFront"); });
+  $("#spCompose")?.addEventListener("submit", publishStory);
+  $("#spCommentForm")?.addEventListener("submit", sendComment);
+  $("#spDeletePost")?.addEventListener("click", deleteStory);
   $("#closeLearn")?.addEventListener("click", () => $("#learnDialog").close());
   $("#obSkip")?.addEventListener("click", obAbort);
   $("#libDaily")?.addEventListener("click", claimDailyReward);
@@ -4919,6 +5183,7 @@ window.addEventListener("DOMContentLoaded", () => {
     state.aiControl = localStorage.getItem("faam-ai-control") === "1";
   } catch (e) {}
   initBoot();
+  loadPaperTeaser();                                 // Stock Paper promo on the splash
   initVersion();
   setInterval(checkForUpdate, 60_000);              // poll for a new build each minute
   window.addEventListener("focus", checkForUpdate); // and whenever the app refocuses

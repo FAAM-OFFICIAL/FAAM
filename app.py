@@ -73,6 +73,14 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # What's-new feed: shown in-app, and the top version drives the "new" badge.
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
+    {"version": "1.9", "date": "2026-10-03", "title": "The FAAM Stock Paper", "items": [
+        {"tag": "new", "text": "The FAAM Stock Paper — market notes, earnings and announcements published by FAAM. Open it from the top bar and join the conversation in the comments."},
+        {"tag": "new", "text": "FAAM Learn is now a full library: 14 courses across stocks, risk, strategy, crypto and forex, each an interactive article with quick reviews and a 5-question unit test."},
+        {"tag": "new", "text": "Leaderboard, daily rewards with 2× points boosts, and streak freezes you earn by passing a review."},
+        {"tag": "improved", "text": "Your watchlist, portfolio and broker settings are now strictly private to your account."},
+        {"tag": "fixed", "text": "FAAM no longer shows a blank 404 page when another app is using its usual port — it finds a free one."},
+        {"tag": "improved", "text": "Game of Stocks and practice trading have been retired while video courses and new simulations are built."},
+    ]},
     {"version": "1.8", "date": "2026-07-09", "title": "Practice trading + interactive course", "items": [
         {"tag": "new", "text": "FAAM Learn — a full-screen learning hub, in development now. Open it from the top bar."},
         {"tag": "new", "text": "Practice trading — a simulated $10,000 account with real delayed prices. Buy and sell with no money at risk."},
@@ -3572,6 +3580,181 @@ def openai_tts(text: str, voice: str = TTS_VOICE):
         return None, {"error": f"network error: {e.reason}"}
 
 
+# ---------- The FAAM Stock Paper ----------------------------------------------
+# FAAM's own announcement board: the admin (dev) account publishes posts about
+# the market and the app, and any signed-in user can comment. Plain text only —
+# the page renders everything with textContent, so nothing here is ever HTML.
+STOCKPAPER_FILE = DATA_DIR / "stockpaper.json"
+SP_KINDS = ("Market", "Earnings", "Explainer", "Announcement")
+SP_TITLE_MAX = 140
+SP_BODY_MAX = 8000
+SP_COMMENT_MAX = 1000
+SP_MAX_POSTS = 300
+SP_MAX_COMMENTS = 500             # per post
+SP_COMMENT_GAP = 8                # seconds between one user's comments
+SP_COMMENT_HOURLY = 30            # comments per user per hour
+_SP_LOCK = threading.RLock()
+_SP_RATE: dict = {}               # username -> [timestamps]
+_TICKER_RE = re.compile(r"^[A-Z0-9.\-^=]{1,12}$")
+
+
+def _sp_load() -> dict:
+    d = _load_json(STOCKPAPER_FILE, {})
+    if not isinstance(d, dict) or not isinstance(d.get("posts"), list):
+        d = {"posts": []}
+    return d
+
+
+def _sp_clean(text, limit: int) -> str:
+    """Trim, cap, and strip control characters (keeping newlines)."""
+    s = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    s = "".join(ch for ch in s if ch == "\n" or ch == "\t" or ord(ch) >= 32)
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+    return s[:limit]
+
+
+def _sp_tickers(raw) -> list:
+    if isinstance(raw, str):
+        raw = re.split(r"[\s,]+", raw)
+    out = []
+    for t in raw or []:
+        t = str(t).strip().upper().lstrip("$")
+        if t and _TICKER_RE.match(t) and t not in out:
+            out.append(t)
+    return out[:6]
+
+
+def _sp_public_post(p: dict, full: bool = False) -> dict:
+    body = p.get("body", "")
+    return {
+        "id": p["id"], "title": p.get("title", ""), "kind": p.get("kind", "Market"),
+        "tickers": p.get("tickers", []), "ts": int(p.get("ts") or 0),
+        "pinned": bool(p.get("pinned")),
+        "body": body if full else (body[:280] + ("…" if len(body) > 280 else "")),
+        "comments": len(p.get("comments") or []),
+    }
+
+
+def stockpaper_list(limit: int = 50) -> list:
+    posts = _sp_load()["posts"]
+    posts = sorted(posts, key=lambda p: (not p.get("pinned"), -int(p.get("ts") or 0)))
+    return [_sp_public_post(p) for p in posts[:max(1, min(limit, 100))]]
+
+
+def stockpaper_latest() -> dict | None:
+    posts = _sp_load()["posts"]
+    if not posts:
+        return None
+    p = max(posts, key=lambda q: int(q.get("ts") or 0))
+    return {"id": p["id"], "title": p.get("title", ""), "kind": p.get("kind", ""),
+            "ts": int(p.get("ts") or 0)}
+
+
+def stockpaper_get(post_id: str, viewer: str) -> dict | None:
+    for p in _sp_load()["posts"]:
+        if p["id"] == post_id:
+            admin = is_admin_username(viewer)
+            out = _sp_public_post(p, full=True)
+            out["commentList"] = [{
+                "id": c["id"], "user": c.get("user", ""), "body": c.get("body", ""),
+                "ts": int(c.get("ts") or 0),
+                "staff": bool(c.get("staff")),
+                "canDelete": admin or c.get("user") == viewer,
+            } for c in (p.get("comments") or [])]
+            return out
+    return None
+
+
+def stockpaper_publish(author: str, title, body, kind, tickers, pinned=False) -> dict:
+    if not is_admin_username(author):
+        return {"error": "Only FAAM can publish to the Stock Paper.", "status": 403}
+    title = _sp_clean(title, SP_TITLE_MAX).replace("\n", " ")
+    body = _sp_clean(body, SP_BODY_MAX)
+    if len(title) < 4:
+        return {"error": "Give the post a headline (at least 4 characters).", "status": 400}
+    if len(body) < 10:
+        return {"error": "The post needs a body (at least 10 characters).", "status": 400}
+    kind = kind if kind in SP_KINDS else "Market"
+    post = {"id": secrets.token_hex(6), "title": title, "body": body, "kind": kind,
+            "tickers": _sp_tickers(tickers), "author": author, "ts": int(time.time()),
+            "pinned": bool(pinned), "comments": []}
+    with _SP_LOCK:
+        d = _sp_load()
+        d["posts"].append(post)
+        d["posts"] = sorted(d["posts"], key=lambda p: int(p.get("ts") or 0))[-SP_MAX_POSTS:]
+        _save_json(STOCKPAPER_FILE, d)
+    return {"ok": True, "post": _sp_public_post(post, full=True)}
+
+
+def stockpaper_delete(actor: str, post_id: str) -> dict:
+    if not is_admin_username(actor):
+        return {"error": "Only FAAM can remove posts.", "status": 403}
+    with _SP_LOCK:
+        d = _sp_load()
+        before = len(d["posts"])
+        d["posts"] = [p for p in d["posts"] if p["id"] != post_id]
+        if len(d["posts"]) == before:
+            return {"error": "No such post.", "status": 404}
+        _save_json(STOCKPAPER_FILE, d)
+    return {"ok": True}
+
+
+def _sp_rate_ok(user: str) -> str:
+    """'' if this user may comment now, else the reason they can't."""
+    now = time.time()
+    hist = [t for t in _SP_RATE.get(user, []) if now - t < 3600]
+    _SP_RATE[user] = hist
+    if hist and now - hist[-1] < SP_COMMENT_GAP:
+        return f"Slow down — wait {int(SP_COMMENT_GAP - (now - hist[-1])) + 1}s between comments."
+    if len(hist) >= SP_COMMENT_HOURLY:
+        return "You've hit the hourly comment limit. Try again later."
+    return ""
+
+
+def stockpaper_comment(user: str, post_id: str, body) -> dict:
+    if not user:
+        return {"error": "Log in to comment.", "status": 401}
+    body = _sp_clean(body, SP_COMMENT_MAX)
+    if len(body) < 2:
+        return {"error": "Write something first.", "status": 400}
+    admin = is_admin_username(user)
+    with _SP_LOCK:
+        if not admin:
+            why = _sp_rate_ok(user)
+            if why:
+                return {"error": why, "status": 429}
+        d = _sp_load()
+        post = next((p for p in d["posts"] if p["id"] == post_id), None)
+        if not post:
+            return {"error": "No such post.", "status": 404}
+        post.setdefault("comments", [])
+        if len(post["comments"]) >= SP_MAX_COMMENTS:
+            return {"error": "Comments on this post are full.", "status": 400}
+        post["comments"].append({"id": secrets.token_hex(5), "user": user, "body": body,
+                                 "ts": int(time.time()), "staff": admin})
+        _save_json(STOCKPAPER_FILE, d)
+        _SP_RATE.setdefault(user, []).append(time.time())
+    return {"ok": True, "post": stockpaper_get(post_id, user)}
+
+
+def stockpaper_uncomment(actor: str, post_id: str, comment_id: str) -> dict:
+    """Authors can delete their own comments; FAAM can delete any."""
+    admin = is_admin_username(actor)
+    with _SP_LOCK:
+        d = _sp_load()
+        post = next((p for p in d["posts"] if p["id"] == post_id), None)
+        if not post:
+            return {"error": "No such post.", "status": 404}
+        c = next((c for c in post.get("comments") or [] if c["id"] == comment_id), None)
+        if not c:
+            return {"error": "No such comment.", "status": 404}
+        if not (admin or c.get("user") == actor):
+            return {"error": "You can only delete your own comments.", "status": 403}
+        post["comments"] = [x for x in post["comments"] if x["id"] != comment_id]
+        _save_json(STOCKPAPER_FILE, d)
+    return {"ok": True, "post": stockpaper_get(post_id, actor)}
+
+
 # ---------- Windows package (download) ----------
 # This launcher fixes the three things that used to make Windows "not work":
 #   1. The Microsoft Store python stub: `where python` finds a fake shim that
@@ -4675,6 +4858,28 @@ NOT FINANCIAL ADVICE.
                                    "library": learn_library_public(_learn_fresh())})
             return self._json({"auth": True, **learn_public(learn_progress(user["username"]))})
 
+        if path == "/api/stockpaper":
+            if not user:
+                return self._json({"error": "Log in to read the Stock Paper."}, 401)
+            return self._json({"posts": stockpaper_list(),
+                               "canPost": is_admin_username(user["username"]),
+                               "kinds": list(SP_KINDS)})
+
+        if path == "/api/stockpaper/latest":
+            # Feeds the loading-screen promo; headline only.
+            if not user:
+                return self._json({"latest": None})
+            return self._json({"latest": stockpaper_latest()})
+
+        if path == "/api/stockpaper/post":
+            if not user:
+                return self._json({"error": "Log in to read the Stock Paper."}, 401)
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            post = stockpaper_get((q.get("id", [""])[0] or "").strip(), user["username"])
+            if not post:
+                return self._json({"error": "No such post."}, 404)
+            return self._json({**post, "canPost": is_admin_username(user["username"])})
+
         if path == "/api/learn/leaderboard":
             # Usernames and points only — never emails or any holdings.
             return self._json(learn_leaderboard((user or {}).get("username", "")))
@@ -5577,6 +5782,28 @@ NOT FINANCIAL ADVICE.
             cid = (body.get("course") or PERSONAL_COURSE_ID).strip()
             res = learn_lesson_check(u["username"], cid, idx, chosen)
             return self._json(res, 200 if res.get("ok") else 400)
+
+        if path.startswith("/api/stockpaper/"):
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in first."}, 401)
+            body = self._read_json()
+            name = u["username"]
+            if path == "/api/stockpaper/post":
+                res = stockpaper_publish(name, body.get("title"), body.get("body"),
+                                         body.get("kind"), body.get("tickers"),
+                                         body.get("pinned"))
+            elif path == "/api/stockpaper/delete":
+                res = stockpaper_delete(name, str(body.get("id") or ""))
+            elif path == "/api/stockpaper/comment":
+                res = stockpaper_comment(name, str(body.get("id") or ""), body.get("body"))
+            elif path == "/api/stockpaper/comment/delete":
+                res = stockpaper_uncomment(name, str(body.get("id") or ""),
+                                           str(body.get("cid") or ""))
+            else:
+                return self._json({"error": "Not found."}, 404)
+            status = res.pop("status", 200 if res.get("ok") else 400)
+            return self._json(res, status)
 
         if path == "/api/learn/daily":
             u = self._current_user()

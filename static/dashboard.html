@@ -37,6 +37,14 @@
       <p class="boot-sub" id="bootSub">Spinning up your financial AI dashboard…</p>
       <div class="boot-bar"><span class="boot-bar-fill" id="bootBar"></span></div>
 
+      <!-- The FAAM Stock Paper promo: latest headline, if there is one -->
+      <button type="button" class="boot-paper" id="bootPaper" hidden>
+        <span class="bp-mast">The FAAM Stock Paper</span>
+        <span class="bp-kicker" id="bootPaperKicker">Latest</span>
+        <span class="bp-head" id="bootPaperHead">Market notes, straight from FAAM.</span>
+        <span class="bp-cta">Read it →</span>
+      </button>
+
       <!-- Sponsor slot on the loading splash (hidden automatically if the image is missing) -->
       <div class="boot-ad" id="bootAd" hidden>
         <span class="boot-ad-label">Sponsored</span>
@@ -118,6 +126,11 @@
           <path fill="currentColor" d="M12 3 1 9l11 6 9-4.9V17h2V9L12 3zM5 13.2V17l7 3.8 7-3.8v-3.8l-7 3.8-7-3.8z"/>
         </svg>
         <span>FAAM Learn</span>
+      </button>
+      <button class="paper-cta" id="paperBtn" title="The FAAM Stock Paper">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h13v14a2 2 0 0 0 2 2H6a2 2 0 0 1-2-2V5z"/><path d="M17 9h3v10a2 2 0 0 1-2 2"/><path d="M8 9h5M8 13h5M8 17h3"/></svg>
+        <span>Stock Paper</span>
+        <i class="paper-dot" id="paperDot" hidden></i>
       </button>
       <button class="iconbtn" id="recapBtn" aria-label="Daily recap video" title="Daily recap video">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -794,6 +807,73 @@
         </div>
       </section>
 
+    </div>
+  </dialog>
+
+  <!-- The FAAM Stock Paper — FAAM's announcement board -->
+  <dialog id="paperDialogSP" class="sp-fs" aria-label="The FAAM Stock Paper">
+    <div class="sp-bar">
+      <button type="button" class="sp-back" id="spBack" hidden>← All stories</button>
+      <span class="sp-bar-title" id="spBarTitle">The FAAM Stock Paper</span>
+      <button class="learn-fs-x" id="closePaperSP" aria-label="Close the Stock Paper" title="Close">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sp-body">
+      <!-- FRONT PAGE -->
+      <section class="sp-view" id="spFront">
+        <header class="sp-mast">
+          <p class="sp-mast-top"><span id="spDate"></span><span>Published by FAAM</span></p>
+          <h1>The FAAM Stock Paper</h1>
+          <p class="sp-mast-sub">Market notes, earnings and news from the FAAM desk. Not financial advice.</p>
+        </header>
+
+        <!-- Composer: only the FAAM account sees this -->
+        <form class="sp-compose" id="spCompose" hidden>
+          <div class="sp-compose-h">
+            <b>Write a story</b>
+            <span class="muted small">Posting as FAAM · visible to every signed-in user</span>
+          </div>
+          <input id="spTitle" maxlength="140" placeholder="Headline" autocomplete="off" required />
+          <div class="sp-compose-row">
+            <select id="spKind" aria-label="Section"></select>
+            <input id="spTickers" placeholder="Tickers (e.g. NVDA, AMD)" autocomplete="off" />
+            <label class="sp-pin"><input type="checkbox" id="spPinned" /> Pin to top</label>
+          </div>
+          <textarea id="spText" rows="6" maxlength="8000" placeholder="Write the story. Leave a blank line between paragraphs." required></textarea>
+          <div class="sp-compose-foot">
+            <span class="form-err" id="spComposeErr"></span>
+            <button type="submit" class="btn-go" id="spPublish">Publish</button>
+          </div>
+        </form>
+
+        <div class="sp-list" id="spList"></div>
+        <p class="sp-empty muted" id="spEmpty" hidden>No stories yet. FAAM's first edition is on the way.</p>
+      </section>
+
+      <!-- ONE STORY -->
+      <section class="sp-view" id="spStory" hidden>
+        <article class="sp-article">
+          <p class="sp-kicker" id="spStoryKind"></p>
+          <h1 id="spStoryTitle"></h1>
+          <p class="sp-byline"><b>FAAM</b><span id="spStoryDate"></span></p>
+          <div class="sp-tickers" id="spStoryTickers"></div>
+          <div class="sp-text" id="spStoryBody"></div>
+          <button type="button" class="sp-del" id="spDeletePost" hidden>Delete this story</button>
+        </article>
+
+        <section class="sp-comments">
+          <h2 id="spCommentsH">Comments</h2>
+          <form class="sp-cform" id="spCommentForm">
+            <textarea id="spCommentText" rows="3" maxlength="1000" placeholder="Add a comment…" required></textarea>
+            <div class="sp-cform-foot">
+              <span class="form-err" id="spCommentErr"></span>
+              <button type="submit" class="btn-go" id="spCommentSend">Comment</button>
+            </div>
+          </form>
+          <div class="sp-clist" id="spCommentList"></div>
+        </section>
+      </section>
     </div>
   </dialog>
 
