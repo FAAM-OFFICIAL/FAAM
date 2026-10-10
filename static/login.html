@@ -202,6 +202,13 @@
     $("#toggleLink").addEventListener("click", () => setMode("signup"));
 
     // Google redirect messages
+    // After signing in, return to the FAAM Connect screen if that's where the
+    // visitor came from. Only /connect is allowed, so this can't be used to
+    // bounce someone to another site.
+    function afterLogin() {
+      const next = new URLSearchParams(location.search).get("next") || "";
+      return /^\/connect(\?[^#]*)?$/.test(next) ? next : "/dashboard";
+    }
     const g = new URLSearchParams(location.search).get("g");
     if (g) {
       const e = $("#err"); e.classList.add("show");
@@ -239,7 +246,7 @@
           body: JSON.stringify(payload),
         });
         const d = await r.json();
-        if (r.ok && !d.error) { location.href = "/dashboard"; return; }
+        if (r.ok && !d.error) { location.href = afterLogin(); return; }
 
         if (d.captcha_required) {
           // The pause: reveal the robot test (or a fresh one if it was consumed).

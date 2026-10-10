@@ -109,10 +109,6 @@
       </div>
     </div>
     <div class="topbar-right">
-      <div class="status">
-        <span class="dot" id="aiDot"></span>
-        <span id="aiStatus">connecting…</span>
-      </div>
       <div class="market-clock" id="marketClock">—</div>
       <button class="pro-pill" id="proBtn" title="FAAM Pro">Upgrade</button>
       <button class="iconbtn" id="screenerBtn" aria-label="AI screener" title="AI screener — scan stocks in plain English">
@@ -131,6 +127,15 @@
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h13v14a2 2 0 0 0 2 2H6a2 2 0 0 1-2-2V5z"/><path d="M17 9h3v10a2 2 0 0 1-2 2"/><path d="M8 9h5M8 13h5M8 17h3"/></svg>
         <span>Stock Paper</span>
         <i class="paper-dot" id="paperDot" hidden></i>
+      </button>
+      <button class="sb-cta" id="sbBtn" title="Stocks Browser — research the web without leaving FAAM">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M4 11h14M11 4c2 2.1 2 11.9 0 14M11 4c-2 2.1-2 11.9 0 14M21 21l-4.2-4.2"/></svg>
+        <span>Stocks Browser</span>
+      </button>
+      <!-- DEV ONLY (first draft): shown by renderAccount() for admin accounts -->
+      <button class="sim-cta" id="simBtn" title="Stock simulator — dev draft" hidden>
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/><circle cx="19" cy="6" r="1.5"/></svg>
+        <span>Simulator</span><em>DEV</em>
       </button>
       <button class="iconbtn" id="recapBtn" aria-label="Daily recap video" title="Daily recap video">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -169,6 +174,10 @@
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M4 4h7v7H4zM13 4h7v4h-7zM13 11h7v9h-7zM4 13h7v7H4z"/>
         </svg>
+      </button>
+      <button class="iconbtn" id="notifBtn" aria-label="Notifications" title="Notifications &amp; price alerts">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
+        <span class="notif-count" id="notifCount" hidden>0</span>
       </button>
       <button class="iconbtn" id="settingsBtn" aria-label="Settings" title="Settings">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -216,7 +225,13 @@
             <div id="symPrice" class="price">—</div>
             <div id="symChange" class="change">—</div>
             <div id="symExt" class="ext-change" hidden></div>
-            <button class="buy-btn" id="headerBuyBtn">Buy ▸</button>
+            <div class="head-actions">
+              <button class="alert-btn" id="headerAlertBtn" title="Get an alert when this stock moves">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
+                Alert
+              </button>
+              <button class="buy-btn" id="headerBuyBtn">Buy ▸</button>
+            </div>
           </div>
         </header>
 
@@ -828,6 +843,24 @@
           <p class="sp-mast-sub">Market notes, earnings and news from the FAAM desk. Not financial advice.</p>
         </header>
 
+        <!-- AI prompt bar: FAAM account only. Drafts into the composer below. -->
+        <form class="sp-ai-bar" id="spAiBar" hidden>
+          <span class="sp-ai-ic" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+          </span>
+          <input id="spAiPrompt" maxlength="600" autocomplete="off"
+                 placeholder="Ask FAAM AI to write a story — e.g. “a market note on $NVDA and $AMD this week”" />
+          <button type="submit" class="btn-go" id="spAiGo">Draft</button>
+        </form>
+        <p class="sp-ai-hint muted small" id="spAiHint" hidden>Mention tickers like $NVDA and the AI works from live prices and real headlines. It drafts into the box below — nothing is published until you press Publish.</p>
+
+        <!-- Website mirror status (dev only) -->
+        <div class="sp-site" id="spSite" hidden>
+          <span class="sp-site-dot" id="spSiteDot"></span>
+          <span class="sp-site-txt" id="spSiteTxt">Website</span>
+          <button type="button" class="sp-site-sync" id="spSiteSync">Sync now</button>
+        </div>
+
         <!-- Composer: only the FAAM account sees this -->
         <form class="sp-compose" id="spCompose" hidden>
           <div class="sp-compose-h">
@@ -839,8 +872,26 @@
             <select id="spKind" aria-label="Section"></select>
             <input id="spTickers" placeholder="Tickers (e.g. NVDA, AMD)" autocomplete="off" />
             <label class="sp-pin"><input type="checkbox" id="spPinned" /> Pin to top</label>
+            <label class="sp-pin"><input type="checkbox" id="spDeveloping" /> Developing</label>
           </div>
           <textarea id="spText" rows="6" maxlength="8000" placeholder="Write the story. Leave a blank line between paragraphs." required></textarea>
+
+          <!-- AI picture preview (set by Polish) -->
+          <div class="sp-pic" id="spPic" hidden>
+            <img id="spPicImg" alt="AI illustration for this story" />
+            <div class="sp-pic-bar"><span>Illustration generated by AI</span>
+              <button type="button" id="spPicRemove">Remove picture</button></div>
+          </div>
+
+          <!-- Polish with AI: after writing, choose what the AI should do -->
+          <div class="sp-polish">
+            <span class="sp-polish-h">Polish with AI</span>
+            <label class="sp-chip"><input type="checkbox" id="spOptGrammar" checked /> Check grammar</label>
+            <label class="sp-chip"><input type="checkbox" id="spOptDeveloping" /> Make it a developing story</label>
+            <label class="sp-chip"><input type="checkbox" id="spOptPicture" /> Add a picture</label>
+            <button type="button" class="sp-polish-go" id="spPolish">Polish</button>
+          </div>
+          <ul class="sp-notes" id="spNotes" hidden></ul>
           <div class="sp-compose-foot">
             <span class="form-err" id="spComposeErr"></span>
             <button type="submit" class="btn-go" id="spPublish">Publish</button>
@@ -854,10 +905,14 @@
       <!-- ONE STORY -->
       <section class="sp-view" id="spStory" hidden>
         <article class="sp-article">
-          <p class="sp-kicker" id="spStoryKind"></p>
+          <p class="sp-kicker"><span class="sp-dev" id="spStoryDev" hidden>Developing</span><span id="spStoryKind"></span></p>
           <h1 id="spStoryTitle"></h1>
           <p class="sp-byline"><b>FAAM</b><span id="spStoryDate"></span></p>
           <div class="sp-tickers" id="spStoryTickers"></div>
+          <figure class="sp-figure" id="spStoryFig" hidden>
+            <img id="spStoryImg" alt="" />
+            <figcaption id="spStoryCap"></figcaption>
+          </figure>
           <div class="sp-text" id="spStoryBody"></div>
           <button type="button" class="sp-del" id="spDeletePost" hidden>Delete this story</button>
         </article>
@@ -873,6 +928,120 @@
           </form>
           <div class="sp-clist" id="spCommentList"></div>
         </section>
+      </section>
+    </div>
+  </dialog>
+
+  <!-- Stock simulator — DEV ONLY first draft -->
+  <dialog id="simDialog" class="sim-fs" aria-label="Stock simulator">
+    <div class="sim-bar">
+      <span class="sim-bar-title">Stock Simulator</span>
+      <span class="sim-chip">DEV DRAFT</span>
+      <span class="sim-bar-sp"></span>
+      <button type="button" class="sim-new" id="simNew" hidden>New simulation</button>
+      <button class="learn-fs-x" id="closeSim" aria-label="Close the simulator" title="Close">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+
+    <div class="sim-body">
+      <!-- SETUP -->
+      <section class="sim-view sim-setup" id="simSetup">
+        <h1>Trade the past, one day at a time.</h1>
+        <p class="muted">A real stock's history plays back day by day. You start with $10,000, trade at each day's close, and only see a day once it has happened. At the end you're scored against simply buying and holding.</p>
+
+        <div class="sim-field">
+          <span class="sim-label">Stock</span>
+          <div class="sim-seg" id="simModeSeg">
+            <button type="button" class="on" data-mode="blind">Mystery stock</button>
+            <button type="button" data-mode="pick">Choose one</button>
+          </div>
+          <p class="sim-hint" id="simModeHint">A random well-known stock from the last five years. Its name, dates and real price stay hidden (prices start at $100) so hindsight can't help.</p>
+          <input id="simSymbol" placeholder="Ticker, e.g. NVDA" autocomplete="off" hidden />
+        </div>
+
+        <div class="sim-field">
+          <span class="sim-label">Length</span>
+          <div class="sim-seg" id="simLenSeg">
+            <button type="button" data-len="short">3 months</button>
+            <button type="button" class="on" data-len="medium">6 months</button>
+            <button type="button" data-len="long">1 year</button>
+          </div>
+        </div>
+
+        <p class="form-err" id="simSetupErr"></p>
+        <button type="button" class="btn-go" id="simStart">Start simulation →</button>
+      </section>
+
+      <!-- PLAY -->
+      <section class="sim-view sim-play" id="simPlay" hidden>
+        <div class="sim-main">
+          <div class="sim-head">
+            <div>
+              <h2 id="simName">Mystery stock</h2>
+              <p class="muted small" id="simDayLine">Day 0 of 120</p>
+            </div>
+            <div class="sim-price"><b id="simPrice">$100.00</b><span id="simDayChg"></span></div>
+          </div>
+          <div class="sim-chart"><canvas id="simChart"></canvas></div>
+          <div class="sim-prog"><i id="simProgFill"></i></div>
+        </div>
+
+        <aside class="sim-side">
+          <div class="sim-stats">
+            <div><span>Portfolio</span><b id="simEquity">$10,000</b></div>
+            <div><span>Your return</span><b id="simRet">0.00%</b></div>
+            <div><span>Buy &amp; hold</span><b id="simHold">0.00%</b></div>
+            <div><span>Cash</span><b id="simCash">$10,000</b></div>
+            <div><span>Shares</span><b id="simShares">0</b></div>
+          </div>
+
+          <div class="sim-ticket">
+            <label for="simQty">Shares</label>
+            <div class="sim-qty-row">
+              <input id="simQty" type="number" min="1" step="1" value="10" />
+              <button type="button" class="sim-max" id="simMax" title="Most you can buy, or all you hold">Max</button>
+            </div>
+            <div class="sim-trade-row">
+              <button type="button" class="sim-buy" id="simBuy">Buy</button>
+              <button type="button" class="sim-sell" id="simSell">Sell</button>
+            </div>
+            <p class="form-err" id="simErr"></p>
+          </div>
+
+          <div class="sim-adv">
+            <button type="button" class="btn-go" id="simNext">Next day →</button>
+            <div class="sim-adv-row">
+              <button type="button" class="btn-ghost" id="simNext5">+5 days</button>
+              <button type="button" class="btn-ghost" id="simEnd">To the end</button>
+            </div>
+          </div>
+
+          <div class="sim-log">
+            <span class="sim-label">Trades</span>
+            <ol id="simTrades"><li class="muted small">None yet.</li></ol>
+          </div>
+        </aside>
+
+        <!-- END OF RUN -->
+        <div class="sim-result" id="simResult" hidden>
+          <div class="sim-result-card">
+            <p class="sim-reveal-k">It was…</p>
+            <h2 id="simRevealName"></h2>
+            <p class="muted" id="simRevealDates"></p>
+            <div class="sim-result-grid">
+              <div><span>You</span><b id="simResYou"></b></div>
+              <div><span>Buy &amp; hold</span><b id="simResHold"></b></div>
+              <div><span>Worst drop</span><b id="simResDD"></b></div>
+              <div><span>Trades</span><b id="simResTrades"></b></div>
+            </div>
+            <p class="sim-verdict" id="simVerdict"></p>
+            <div class="sim-result-actions">
+              <button type="button" class="btn-go" id="simAgain">Play again</button>
+              <button type="button" class="btn-ghost" id="simReview">Look at the chart</button>
+            </div>
+          </div>
+        </div>
       </section>
     </div>
   </dialog>
@@ -997,6 +1166,141 @@
     <div class="voice-hint muted small">Speaks back using FAAM's voice. Esc to close.</div>
   </dialog>
 
+  <!-- Stocks Browser: AI web research without leaving FAAM -->
+  <dialog id="sbDialog" class="sb-fs" data-look="faam" aria-label="Stocks Browser">
+    <div class="sb-chrome">
+      <div class="sb-nav">
+        <button type="button" class="sb-navbtn" id="sbBackBtn" aria-label="Back" title="Back" disabled>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <button type="button" class="sb-navbtn" id="sbFwdBtn" aria-label="Forward" title="Forward" disabled>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+        </button>
+        <button type="button" class="sb-navbtn" id="sbHomeBtn" aria-label="Browser home" title="Home">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>
+        </button>
+      </div>
+      <form class="sb-omni" id="sbForm" role="search" autocomplete="off">
+        <svg class="sb-omni-ico" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="sbInput" type="search" maxlength="300" placeholder="Search stocks, companies, or ask anything" aria-label="Search" />
+        <select id="sbSource" aria-label="Search in"></select>
+        <button type="submit" class="sb-go">Search</button>
+      </form>
+      <div class="sb-look" role="radiogroup" aria-label="Page look">
+        <button type="button" role="radio" data-look="faam" aria-checked="true">FAAM</button>
+        <button type="button" role="radio" data-look="portal" aria-checked="false" title="A finance-portal look">Portal</button>
+        <button type="button" role="radio" data-look="broadsheet" aria-checked="false" title="A newspaper look">Broadsheet</button>
+      </div>
+      <button class="learn-fs-x" id="closeSB" aria-label="Close the Stocks Browser" title="Close">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="sb-body" id="sbBody">
+      <!-- Home -->
+      <section class="sb-home" id="sbHome">
+        <p class="sb-home-kicker">FAAM</p>
+        <h1 class="sb-home-title">Stocks Browser</h1>
+        <p class="sb-home-sub">Ask anything about stocks. FAAM AI searches the web and brings back a short brief with its sources, so you don't have to leave the app.</p>
+        <div class="sb-chips" id="sbSuggest"></div>
+        <div class="sb-recent" id="sbRecentWrap" hidden>
+          <div class="sb-recent-h"><span>Recent searches</span><button type="button" id="sbRecentClear">Clear</button></div>
+          <div class="sb-chips" id="sbRecent"></div>
+        </div>
+      </section>
+      <!-- Searching -->
+      <section class="sb-loading" id="sbLoading" hidden>
+        <p class="sb-kicker" id="sbLoadKicker">Searching</p>
+        <h1 class="sb-q" id="sbLoadQ"></h1>
+        <ol class="sb-steps" id="sbSteps">
+          <li>Searching the web</li>
+          <li>Reading the sources</li>
+          <li>Writing your brief</li>
+        </ol>
+        <div class="sb-skel"><i></i><i></i><i></i><i style="width:60%"></i></div>
+      </section>
+      <!-- Problem -->
+      <section class="sb-error" id="sbError" hidden>
+        <h2>That search didn't work</h2>
+        <p id="sbErrMsg"></p>
+        <button type="button" class="ghostbtn" id="sbRetry">Try again</button>
+      </section>
+      <!-- Result -->
+      <section class="sb-result" id="sbResult" hidden>
+        <div class="sb-main">
+          <p class="sb-kicker" id="sbKicker"></p>
+          <h1 class="sb-q" id="sbTitle"></h1>
+          <article class="sb-brief" id="sbBrief"></article>
+          <p class="sb-note" id="sbNote">Written by FAAM AI from the sources below. Information, not financial advice.</p>
+          <h3 class="sb-h">Sources</h3>
+          <ol class="sb-sources" id="sbSources"></ol>
+          <div id="sbMoreWrap" hidden>
+            <h3 class="sb-h">Other pages the search looked at</h3>
+            <ul class="sb-more" id="sbMore"></ul>
+          </div>
+        </div>
+        <aside class="sb-side">
+          <div class="sb-quote" id="sbQuote" hidden>
+            <div class="sb-quote-top">
+              <div><div class="sb-quote-sym" id="sbQSym"></div><div class="sb-quote-name" id="sbQName"></div></div>
+              <div class="sb-quote-px"><div id="sbQPrice"></div><div id="sbQChg"></div></div>
+            </div>
+            <svg class="sb-spark" id="sbQSpark" viewBox="0 0 200 54" preserveAspectRatio="none" aria-label="Last month"></svg>
+            <div class="sb-quote-btns">
+              <button type="button" class="ghostbtn" id="sbQOpen">Open in FAAM</button>
+              <button type="button" class="ghostbtn" id="sbQAlert">Set alert</button>
+            </div>
+          </div>
+          <div class="sb-news" id="sbNewsWrap" hidden>
+            <h3 class="sb-h">Latest headlines</h3>
+            <ul id="sbNews"></ul>
+          </div>
+        </aside>
+      </section>
+    </div>
+  </dialog>
+
+  <!-- Notifications & price alerts -->
+  <dialog id="notifDialog" class="form-dialog notif-dialog">
+    <header>
+      <h3>Notifications</h3>
+      <button class="iconbtn" id="closeNotif" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="nt-tabs" role="tablist">
+      <button type="button" role="tab" data-tab="inbox" aria-selected="true">Inbox <span class="nt-tabcount" id="ntTabCount" hidden></span></button>
+      <button type="button" role="tab" data-tab="alerts" aria-selected="false">Price alerts</button>
+    </div>
+    <div class="form-body nt-scroll">
+      <section id="ntInbox">
+        <div class="nt-actions">
+          <button type="button" class="nt-link" id="ntReadAll">Mark all read</button>
+          <button type="button" class="nt-link" id="ntClear">Clear all</button>
+        </div>
+        <ul class="nt-list" id="ntList"></ul>
+        <p class="nt-empty muted small" id="ntEmpty">You're all caught up. Price alerts and new Stock Paper stories show up here.</p>
+        <button type="button" class="ghostbtn nt-push" id="ntPush" hidden>Also show them as desktop notifications</button>
+      </section>
+      <section id="ntAlerts" hidden>
+        <form class="al-form" id="alForm" autocomplete="off">
+          <input id="alSymbol" maxlength="12" placeholder="Symbol" aria-label="Stock symbol" />
+          <select id="alKind" aria-label="When">
+            <option value="above">rises to $</option>
+            <option value="below">falls to $</option>
+            <option value="up">is up % today</option>
+            <option value="down">is down % today</option>
+          </select>
+          <input id="alValue" type="number" step="any" min="0" placeholder="Price" aria-label="Value" />
+          <button type="submit" class="primary-btn">Add</button>
+        </form>
+        <p class="al-msg small" id="alMsg" role="status"></p>
+        <ul class="nt-list" id="alList"></ul>
+        <p class="nt-empty muted small" id="alEmpty">No alerts yet. Add one above, or tap Alert on any stock.</p>
+        <p class="muted small al-foot">FAAM checks your alerts every minute while it's running. Each alert fires once; tap Re-arm to use it again.</p>
+      </section>
+    </div>
+  </dialog>
+
   <!-- Account menu -->
   <dialog id="accountDialog" class="form-dialog account-dialog">
     <header>
@@ -1013,6 +1317,24 @@
           <div class="acct-meta muted small" id="acctMeta"></div>
         </div>
         <span class="acct-badge" id="acctBadge"></span>
+      </div>
+      <!-- FAAM Connect: apps signed in to this account -->
+      <div class="cx-section">
+        <div class="cx-head">Connected apps</div>
+        <ul class="cx-list" id="cxList"></ul>
+        <p class="cx-empty muted small" id="cxEmpty">No apps connected. Open the FAAM iOS App and tap “Connect to FAAM” to move your watchlist and portfolio over.</p>
+      </div>
+      <!-- DEV ONLY: register FAAM's own apps. The server 404s everyone else. -->
+      <div class="cx-section cx-dev" id="cxDev" hidden>
+        <div class="cx-head">Developer · Apps that can connect <span class="cx-devtag">DEV</span></div>
+        <ul class="cx-list" id="cxDevList"></ul>
+        <form class="cx-form" id="cxDevForm" autocomplete="off">
+          <input id="cxDevName" maxlength="40" placeholder="App name" aria-label="App name" />
+          <input id="cxDevRedirect" maxlength="200" placeholder="Return link, e.g. faamipad://connected" aria-label="Return link" />
+          <button type="submit" class="ghostbtn">Add app</button>
+        </form>
+        <p class="cx-err small" id="cxDevErr" role="alert"></p>
+        <p class="muted small cx-note">Apps sign people in at <code>/connect</code> and use the API in CONNECT_API.md.</p>
       </div>
       <button type="button" id="logoutBtn" class="acct-logout">Log out</button>
     </div>

@@ -19,6 +19,7 @@ import os
 import random
 import re
 import secrets
+import subprocess
 import sys
 import tarfile
 import threading
@@ -73,6 +74,15 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # What's-new feed: shown in-app, and the top version drives the "new" badge.
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
+    {"version": "1.10", "date": "2026-10-10", "title": "Stocks Browser & price alerts", "items": [
+        {"tag": "new", "text": "Stocks Browser — ask anything and FAAM AI searches the web, then writes a short brief with its sources. Search everything or just Yahoo Finance, WSJ, Reuters, CNBC or SEC filings, and switch between the FAAM, Portal and Broadsheet looks."},
+        {"tag": "new", "text": "Summarize any article right inside FAAM — no need to leave the app."},
+        {"tag": "new", "text": "Price alerts — get notified when a stock hits your price or moves a set percent in a day. Tap Alert on any stock; the bell in the top bar holds your notifications, and the Mac app shows them as Mac notifications."},
+        {"tag": "new", "text": "You'll get a notification whenever a new Stock Paper story is published."},
+        {"tag": "new", "text": "Stock Paper stories can now include illustrations and a Developing tag for stories still unfolding."},
+        {"tag": "new", "text": "Account → Connected apps shows the apps signed in to your FAAM account, with one-tap disconnect."},
+        {"tag": "improved", "text": "A cleaner top bar."},
+    ]},
     {"version": "1.9", "date": "2026-10-03", "title": "The FAAM Stock Paper", "items": [
         {"tag": "new", "text": "The FAAM Stock Paper — market notes, earnings and announcements published by FAAM. Open it from the top bar and join the conversation in the comments."},
         {"tag": "new", "text": "FAAM Learn is now a full library: 14 courses across stocks, risk, strategy, crypto and forex, each an interactive article with quick reviews and a 5-question unit test."},
@@ -119,10 +129,11 @@ CHANGELOG = [
     ]},
 ]
 ROADMAP = [
+    {"title": "AI agent voice", "text": "Control FAAM by talking — open stocks, set alerts and run searches just by asking."},
     {"title": "Practice trading leagues", "text": "Compare your simulated portfolio with friends on a leaderboard."},
     {"title": "Juno", "text": "A deep model trained on historical stock data — in training now."},
     {"title": "FAAM in the cloud", "text": "Use FAAM in any browser with nothing to install."},
-    {"title": "Price & news alerts", "text": "Get pinged when your stocks move or the story changes."},
+    {"title": "News alerts", "text": "Get pinged when the story changes on the stocks you follow."},
     {"title": "Mobile apps", "text": "FAAM for iOS and Android."},
 ]
 CHANGELOG_VERSION = CHANGELOG[0]["version"] if CHANGELOG else ""
@@ -3630,6 +3641,9 @@ def _sp_public_post(p: dict, full: bool = False) -> dict:
         "id": p["id"], "title": p.get("title", ""), "kind": p.get("kind", "Market"),
         "tickers": p.get("tickers", []), "ts": int(p.get("ts") or 0),
         "pinned": bool(p.get("pinned")),
+        "developing": bool(p.get("developing")),
+        "image": p.get("image") or "",
+        "imageCaption": p.get("imageCaption") or "",
         "body": body if full else (body[:280] + ("…" if len(body) > 280 else "")),
         "comments": len(p.get("comments") or []),
     }
@@ -3647,7 +3661,7 @@ def stockpaper_latest() -> dict | None:
         return None
     p = max(posts, key=lambda q: int(q.get("ts") or 0))
     return {"id": p["id"], "title": p.get("title", ""), "kind": p.get("kind", ""),
-            "ts": int(p.get("ts") or 0)}
+            "ts": int(p.get("ts") or 0), "developing": bool(p.get("developing"))}
 
 
 def stockpaper_get(post_id: str, viewer: str) -> dict | None:
@@ -3665,7 +3679,8 @@ def stockpaper_get(post_id: str, viewer: str) -> dict | None:
     return None
 
 
-def stockpaper_publish(author: str, title, body, kind, tickers, pinned=False) -> dict:
+def stockpaper_publish(author: str, title, body, kind, tickers, pinned=False,
+                      developing=False, image="") -> dict:
     if not is_admin_username(author):
         return {"error": "Only FAAM can publish to the Stock Paper.", "status": 403}
     title = _sp_clean(title, SP_TITLE_MAX).replace("\n", " ")
@@ -3675,14 +3690,24 @@ def stockpaper_publish(author: str, title, body, kind, tickers, pinned=False) ->
     if len(body) < 10:
         return {"error": "The post needs a body (at least 10 characters).", "status": 400}
     kind = kind if kind in SP_KINDS else "Market"
+    # Only an illustration this server generated can be attached.
+    img = str(image or "")
+    img_path = _sp_image_path(img)
+    if img and not (img_path and img_path.exists()):
+        return {"error": "That picture is no longer available — polish again.", "status": 400}
     post = {"id": secrets.token_hex(6), "title": title, "body": body, "kind": kind,
             "tickers": _sp_tickers(tickers), "author": author, "ts": int(time.time()),
-            "pinned": bool(pinned), "comments": []}
+            "pinned": bool(pinned), "developing": bool(developing),
+            "image": img, "imageCaption": "Illustration generated by AI" if img else "",
+            "comments": []}
     with _SP_LOCK:
         d = _sp_load()
         d["posts"].append(post)
         d["posts"] = sorted(d["posts"], key=lambda p: int(p.get("ts") or 0))[-SP_MAX_POSTS:]
         _save_json(STOCKPAPER_FILE, d)
+    paper_site_sync_soon()                          # live on the website too
+    notify_everyone("New in the Stock Paper" + (" · Developing" if developing else ""),
+                    title, kind="paper", ref=post["id"], skip=author)
     return {"ok": True, "post": _sp_public_post(post, full=True)}
 
 
@@ -3691,12 +3716,339 @@ def stockpaper_delete(actor: str, post_id: str) -> dict:
         return {"error": "Only FAAM can remove posts.", "status": 403}
     with _SP_LOCK:
         d = _sp_load()
-        before = len(d["posts"])
-        d["posts"] = [p for p in d["posts"] if p["id"] != post_id]
-        if len(d["posts"]) == before:
+        gone = [p for p in d["posts"] if p["id"] == post_id]
+        if not gone:
             return {"error": "No such post.", "status": 404}
+        d["posts"] = [p for p in d["posts"] if p["id"] != post_id]
         _save_json(STOCKPAPER_FILE, d)
+    for p in gone:                                  # its picture goes with it
+        f = _sp_image_path(p.get("image") or "")
+        if f:
+            f.unlink(missing_ok=True)
+    paper_site_sync_soon()
     return {"ok": True}
+
+
+# ---- Website mirror ------------------------------------------------------------
+# Stories also go live on the public site (faam-official.netlify.app/paper/).
+# Whenever they change here, the full list is pushed to the site's /api/paper
+# function, which asks back for any pictures it doesn't have yet. Pushes run in
+# the background and are coalesced, so publishing never waits on the network.
+#
+# Needs a shared secret: ~/.faam/paper_site_token here, and the same value as
+# FAAM_PAPER_TOKEN in Netlify. Without it, the mirror just stays off.
+PAPER_SITE_TOKEN_FILE = DATA_DIR / "paper_site_token"
+PAPER_SITE_URL_FILE = DATA_DIR / "paper_site_url"
+PAPER_SITE_DEFAULT = "https://faam-official.netlify.app"
+_PS = {"running": False, "dirty": False, "last": None}
+_PS_LOCK = threading.Lock()
+
+
+def paper_site_cfg() -> tuple:
+    def read(p):
+        try:
+            return p.read_text().strip() if p.exists() else ""
+        except Exception:  # noqa: BLE001
+            return ""
+    url = (os.environ.get("FAAM_PAPER_SITE") or read(PAPER_SITE_URL_FILE) or PAPER_SITE_DEFAULT)
+    token = os.environ.get("FAAM_PAPER_SITE_TOKEN") or read(PAPER_SITE_TOKEN_FILE)
+    return url.rstrip("/"), token
+
+
+def _ps_request(method: str, url: str, token: str, body: bytes, ctype: str) -> dict:
+    req = urllib.request.Request(url, data=body, method=method, headers={
+        "Authorization": f"Bearer {token}", "Content-Type": ctype,
+        "User-Agent": "FAAM-desktop (Stock Paper mirror)"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read()).get("error") or f"HTTP {e.code}"
+        except Exception:  # noqa: BLE001
+            msg = f"HTTP {e.code}"
+        return {"error": msg, "code": e.code}
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"couldn't reach the site ({type(e).__name__})"}
+
+
+def paper_site_sync_now() -> dict:
+    """Push every story to the website, then any pictures it's missing."""
+    url, token = paper_site_cfg()
+    if not token:
+        res = {"ok": False, "error": "Website sync isn't set up (no token)."}
+    else:
+        posts = [_sp_public_post(p, full=True) for p in _sp_load()["posts"]]
+        r = _ps_request("POST", f"{url}/api/paper/sync", token,
+                        json.dumps({"posts": posts}).encode(), "application/json")
+        if r.get("error"):
+            res = {"ok": False, "error": r["error"]}
+        else:
+            failed = []
+            for image_id in r.get("missingImages") or []:
+                f = _sp_image_path(image_id)
+                if not (f and f.exists()):
+                    failed.append(image_id)
+                    continue
+                up = _ps_request("PUT", f"{url}/api/paper/img/{image_id}", token,
+                                 f.read_bytes(), "image/jpeg")
+                if up.get("error"):
+                    failed.append(image_id)
+            res = {"ok": not failed, "count": r.get("count", len(posts)),
+                   **({"error": f"{len(failed)} picture(s) didn't upload"} if failed else {})}
+    res["at"] = int(time.time())
+    res["url"] = f"{url}/paper/"
+    _PS["last"] = res
+    return res
+
+
+def paper_site_sync_soon() -> None:
+    """Background push. If one is already running, run once more after it."""
+    if not paper_site_cfg()[1]:
+        return
+    with _PS_LOCK:
+        if _PS["running"]:
+            _PS["dirty"] = True
+            return
+        _PS["running"] = True
+
+    def worker():
+        while True:
+            try:
+                paper_site_sync_now()
+            except Exception as e:  # noqa: BLE001
+                _PS["last"] = {"ok": False, "error": str(e)[:120], "at": int(time.time())}
+            with _PS_LOCK:
+                if _PS["dirty"]:
+                    _PS["dirty"] = False
+                    continue
+                _PS["running"] = False
+                return
+
+    threading.Thread(target=worker, daemon=True, name="paper-site-sync").start()
+
+
+def paper_site_status() -> dict:
+    url, token = paper_site_cfg()
+    return {"configured": bool(token), "url": f"{url}/paper/", "last": _PS["last"],
+            "syncing": _PS["running"]}
+
+
+# ---- AI desk (dev only) -------------------------------------------------------
+# The AI drafts and polishes; it never publishes. Everything it produces lands
+# in the composer for the FAAM account to read, edit and publish by hand.
+SP_IMG_DIR = DATA_DIR / "stockpaper_img"
+SP_IMAGE_MODELS = ("gpt-image-1-mini", "gpt-image-1")   # cheapest first
+SP_IMAGE_COST = 0.02                                    # rough $ per illustration
+SP_AI_HOURLY = 40                                       # guard against a stuck button
+_SP_AI_RATE: list = []
+_SP_IMG_ID = re.compile(r"^[0-9a-f]{16}$")
+_TICKER_WORD = re.compile(r"\$([A-Za-z][A-Za-z0-9.\-]{0,9})|\b([A-Z]{2,5})\b")
+_NOT_TICKERS = {"AI", "CEO", "CFO", "IPO", "USA", "US", "UK", "EU", "GDP", "CPI", "FED",
+                "SEC", "ETF", "ETFS", "EPS", "PE", "Q1", "Q2", "Q3", "Q4", "YOY", "API",
+                "FAAM", "AND", "THE", "FOR", "NEW", "NOW", "TODAY", "NEWS"}
+
+SP_DRAFT_SYSTEM = (
+    "You are the writer for The FAAM Stock Paper, a short market newsletter inside the FAAM "
+    "app. Write one story from the editor's request. Use ONLY the facts provided under FACTS "
+    "for any price, percentage, figure or event; never invent numbers, quotes or events. If "
+    "the facts don't support a claim, leave it out or say it isn't known yet. Plain English, "
+    "neutral and factual, 150-350 words, short paragraphs separated by a blank line, no "
+    "markdown, no headings, no emoji. This is information, not financial advice — never tell "
+    "readers to buy or sell. Output ONLY minified JSON: {\"title\": headline under 100 chars, "
+    "\"body\": the story, \"kind\": one of Market|Earnings|Explainer|Announcement, "
+    "\"tickers\": array of the tickers the story is about}."
+)
+
+SP_POLISH_SYSTEM = (
+    "You are the copy editor for The FAAM Stock Paper. Improve the story you're given as "
+    "instructed. Never add facts, figures, quotes or events that aren't already in it, and "
+    "never change what a number says. Plain text, paragraphs separated by a blank line, no "
+    "markdown. Output ONLY minified JSON: {\"title\": ..., \"body\": ..., \"notes\": array of "
+    "up to 5 short phrases describing what you changed}."
+)
+
+
+def _sp_ai_allowed() -> str:
+    now = time.time()
+    _SP_AI_RATE[:] = [t for t in _SP_AI_RATE if now - t < 3600]
+    if len(_SP_AI_RATE) >= SP_AI_HOURLY:
+        return "That's a lot of AI requests this hour — try again shortly."
+    _SP_AI_RATE.append(now)
+    return ""
+
+
+def _sp_json_reply(result: dict) -> dict | None:
+    if "error" in result:
+        return None
+    record_cost(chat_cost(result))
+    m = re.search(r"\{.*\}", extract_text(result) or "", re.S)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _sp_image_path(image_id: str):
+    return (SP_IMG_DIR / f"{image_id}.jpg") if _SP_IMG_ID.match(image_id or "") else None
+
+
+def _sp_prune_images() -> None:
+    """Drop illustrations that were generated but never published (after a day)."""
+    if not SP_IMG_DIR.exists():
+        return
+    used = {p.get("image") for p in _sp_load()["posts"]}
+    for f in SP_IMG_DIR.glob("*.jpg"):
+        if f.stem not in used and time.time() - f.stat().st_mtime > 86400:
+            f.unlink(missing_ok=True)
+
+
+def sp_tickers_in(text: str) -> list:
+    """Tickers a prompt mentions: $NVDA anywhere, or a bare all-caps word like AMD."""
+    out = []
+    for dollar, bare in _TICKER_WORD.findall(text or ""):
+        t = (dollar or bare).upper()
+        if t and t not in _NOT_TICKERS and _TICKER_RE.match(t) and t not in out:
+            out.append(t)
+    return out[:3]
+
+
+def sp_ai_facts(tickers: list) -> tuple:
+    """Live facts for the tickers: quote moves plus recent headlines."""
+    lines, used = [], []
+    for t in tickers:
+        try:
+            q = yahoo_quote(t, range_="1mo", interval="1d")
+        except Exception:  # noqa: BLE001
+            continue
+        hist = [p for p in (q.get("history") or []) if p.get("c")]
+        if q.get("error") or len(hist) < 2:
+            continue
+        last, prev, first = hist[-1]["c"], hist[-2]["c"], hist[0]["c"]
+        lines.append(
+            f"{t} ({q.get('name') or t}): last close ${last:,.2f}; "
+            f"{(last / prev - 1) * 100:+.2f}% on the day; {(last / first - 1) * 100:+.2f}% over ~1 month.")
+        for n in fetch_news(t, limit=5):
+            lines.append(f"  headline ({n.get('publisher') or 'news'}): {n['title']}")
+        used.append(t)
+    return "\n".join(lines), used
+
+
+def stockpaper_ai_draft(user: str, prompt: str) -> dict:
+    if not is_admin_username(user):
+        return {"error": "Not found.", "status": 404}
+    prompt = _sp_clean(prompt, 600)
+    if len(prompt) < 4:
+        return {"error": "Tell the AI what the story is about.", "status": 400}
+    if not OPENAI_API_KEY:
+        return {"error": "The AI isn't configured on this server.", "status": 503}
+    why = _sp_ai_allowed()
+    if why:
+        return {"error": why, "status": 429}
+    facts, used = sp_ai_facts(sp_tickers_in(prompt))
+    today = time.strftime("%A %d %B %Y", time.gmtime())
+    msg = (f"TODAY: {today}\nREQUEST: {prompt}\n\nFACTS:\n"
+           + (facts or "(No market data was found for this request. Do not state any prices "
+                       "or figures; write only what the request itself establishes.)"))
+    got = _sp_json_reply(openai_chat([{"role": "user", "content": msg}], system=SP_DRAFT_SYSTEM))
+    if not got or not got.get("title") or not got.get("body"):
+        return {"error": "The AI didn't return a usable draft. Try rewording.", "status": 502}
+    kind = got.get("kind") if got.get("kind") in SP_KINDS else "Market"
+    return {"ok": True, "draft": {
+        "title": _sp_clean(got["title"], SP_TITLE_MAX).replace("\n", " "),
+        "body": _sp_clean(got["body"], SP_BODY_MAX),
+        "kind": kind,
+        "tickers": _sp_tickers(got.get("tickers") or used),
+    }, "sources": used, "grounded": bool(facts)}
+
+
+def _openai_image(prompt: str) -> tuple:
+    """Generate one landscape JPEG. Returns (bytes, error)."""
+    last_err = "image generation failed"
+    for model in SP_IMAGE_MODELS:
+        payload = {"model": model, "prompt": prompt, "size": "1536x1024", "quality": "medium",
+                   "output_format": "jpeg", "output_compression": 82, "n": 1}
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/images/generations",
+            data=json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                data = json.loads(r.read())
+            b64 = (data.get("data") or [{}])[0].get("b64_json")
+            if b64:
+                return base64.b64decode(b64), ""
+        except urllib.error.HTTPError as e:
+            try:
+                last_err = json.loads(e.read()).get("error", {}).get("message", "") or last_err
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as e:  # noqa: BLE001
+            last_err = str(e)
+    return b"", last_err
+
+
+def stockpaper_ai_polish(user: str, title: str, body: str, grammar=True,
+                         developing=False, picture=False) -> dict:
+    if not is_admin_username(user):
+        return {"error": "Not found.", "status": 404}
+    title = _sp_clean(title, SP_TITLE_MAX).replace("\n", " ")
+    body = _sp_clean(body, SP_BODY_MAX)
+    if len(title) < 4 or len(body) < 10:
+        return {"error": "Write a headline and a story first.", "status": 400}
+    if not (grammar or developing or picture):
+        return {"error": "Pick at least one thing for the AI to do.", "status": 400}
+    if not OPENAI_API_KEY:
+        return {"error": "The AI isn't configured on this server.", "status": 503}
+    why = _sp_ai_allowed()
+    if why:
+        return {"error": why, "status": 429}
+
+    out = {"ok": True, "title": title, "body": body, "notes": [],
+           "developing": bool(developing), "image": "", "imageCaption": ""}
+
+    if grammar or developing:
+        asks = []
+        if grammar:
+            asks.append("Fix grammar, spelling and punctuation, and tighten awkward sentences. "
+                        "Keep the writer's meaning and tone.")
+        if developing:
+            asks.append("Restructure it as a DEVELOPING story: open with the latest confirmed "
+                        "facts, then a paragraph starting 'What we know so far:', then one "
+                        "starting 'What's still unclear:' listing open questions, and end with "
+                        "'This story is developing and will be updated.' Prefix nothing to the "
+                        "headline — the app adds the Developing label.")
+        msg = "INSTRUCTIONS:\n- " + "\n- ".join(asks) + f"\n\nHEADLINE: {title}\n\nSTORY:\n{body}"
+        got = _sp_json_reply(openai_chat([{"role": "user", "content": msg}], system=SP_POLISH_SYSTEM))
+        if not got or not got.get("body"):
+            return {"error": "The AI couldn't polish that. Try again.", "status": 502}
+        out["title"] = _sp_clean(got.get("title") or title, SP_TITLE_MAX).replace("\n", " ")
+        out["body"] = _sp_clean(got["body"], SP_BODY_MAX)
+        out["notes"] = [str(n)[:120] for n in (got.get("notes") or [])][:5]
+
+    if picture:
+        # An editorial illustration, not a fake photo: no text, logos or real people,
+        # and the page always labels it as AI-generated.
+        art = (f"Editorial illustration for a financial newspaper story headlined "
+               f"\"{out['title']}\". Context: {out['body'][:400]}. Modern, clean, "
+               "conceptual style with depth and soft light. Absolutely no text, letters, "
+               "numbers, logos, brand marks or recognisable real people.")
+        img, err = _openai_image(art)
+        if not img:
+            out["notes"].append(f"Picture failed: {err[:90]}")
+        else:
+            SP_IMG_DIR.mkdir(parents=True, exist_ok=True)
+            image_id = secrets.token_hex(8)
+            _sp_image_path(image_id).write_bytes(img)
+            record_cost(SP_IMAGE_COST)
+            _sp_prune_images()
+            out["image"] = image_id
+            out["imageCaption"] = "Illustration generated by AI"
+            out["notes"].append("Added an AI illustration")
+    return out
 
 
 def _sp_rate_ok(user: str) -> str:
@@ -3734,6 +4086,7 @@ def stockpaper_comment(user: str, post_id: str, body) -> dict:
                                  "ts": int(time.time()), "staff": admin})
         _save_json(STOCKPAPER_FILE, d)
         _SP_RATE.setdefault(user, []).append(time.time())
+    paper_site_sync_soon()
     return {"ok": True, "post": stockpaper_get(post_id, user)}
 
 
@@ -3752,7 +4105,1050 @@ def stockpaper_uncomment(actor: str, post_id: str, comment_id: str) -> dict:
             return {"error": "You can only delete your own comments.", "status": 403}
         post["comments"] = [x for x in post["comments"] if x["id"] != comment_id]
         _save_json(STOCKPAPER_FILE, d)
+    paper_site_sync_soon()
     return {"ok": True, "post": stockpaper_get(post_id, actor)}
+
+
+# ---------- Stock simulator (DEV ONLY — first draft) ---------------------------
+# A historical replay: a real stock's past daily prices played back one day at a
+# time. You trade at each day's close, then advance. In mystery mode the ticker,
+# the dates and the real price level stay hidden (prices are rebased to $100)
+# until the end, so hindsight can't help. The future part of the window is kept
+# on the server and never sent, so the page can't peek ahead.
+#
+# Gated to admin accounts while it's being built; everyone else gets a 404.
+SIM_POOL = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "JPM", "KO", "DIS",
+            "NFLX", "AMD", "INTC", "BA", "XOM", "WMT", "PFE", "NKE", "SBUX", "COST"]
+SIM_CASH = 10_000.0
+SIM_WARMUP = 40                   # days of history shown before day 1
+SIM_LENGTHS = {"short": 60, "medium": 120, "long": 250}
+SIM_TTL = 4 * 3600                # abandoned sessions are dropped after this
+SIM_MAX_SESSIONS = 20             # per user
+_SIM: dict = {}                   # session id -> state
+_SIM_LOCK = threading.RLock()
+
+
+def _sim_gc() -> None:
+    now = time.time()
+    for sid in [k for k, v in _SIM.items() if now - v["touched"] > SIM_TTL]:
+        _SIM.pop(sid, None)
+
+
+def _sim_candle(s: dict, i: int) -> dict:
+    """One day as the player is allowed to see it."""
+    p = s["window"][i]
+    k = s["scale"]
+    day = i - SIM_WARMUP                    # day 0 = the first tradable day
+    out = {"day": day, "o": round(p["o"] * k, 4), "h": round(p["h"] * k, 4),
+           "l": round(p["l"] * k, 4), "c": round(p["c"] * k, 4)}
+    if not s["blind"]:
+        out["t"] = int(p["t"])
+    return out
+
+
+def _sim_state(s: dict) -> dict:
+    i = s["cursor"]
+    price = s["window"][i]["c"] * s["scale"]
+    equity = s["cash"] + s["shares"] * price
+    start_price = s["window"][SIM_WARMUP]["c"] * s["scale"]
+    end_i = len(s["window"]) - 1
+    out = {
+        "id": s["id"], "blind": s["blind"],
+        "symbol": None if s["blind"] else s["symbol"],
+        "day": i - SIM_WARMUP, "days": end_i - SIM_WARMUP,
+        "price": round(price, 4), "cash": round(s["cash"], 2), "shares": s["shares"],
+        "equity": round(equity, 2),
+        "returnPct": round((equity / SIM_CASH - 1) * 100, 2),
+        # What the same $10,000 would be worth if you'd bought on day 0 and held.
+        "holdPct": round((price / start_price - 1) * 100, 2),
+        "trades": s["trades"][-50:],
+        "done": i >= end_i,
+    }
+    if out["done"]:
+        out["reveal"] = _sim_reveal(s)
+    return out
+
+
+def _sim_reveal(s: dict) -> dict:
+    w = s["window"]
+    first, last = w[SIM_WARMUP], w[-1]
+    # Max drawdown of the player's equity curve.
+    peak, mdd = 0.0, 0.0
+    for e in s["equityCurve"]:
+        peak = max(peak, e)
+        if peak:
+            mdd = min(mdd, e / peak - 1)
+    return {
+        "symbol": s["symbol"], "name": s.get("name") or s["symbol"],
+        "start": int(first["t"]), "end": int(last["t"]),
+        "realStart": round(first["c"], 2), "realEnd": round(last["c"], 2),
+        "maxDrawdownPct": round(mdd * 100, 2),
+    }
+
+
+def sim_start(user: str, symbol: str = "", length: str = "medium", blind: bool = True) -> dict:
+    if not is_admin_username(user):
+        return {"error": "Not found.", "status": 404}
+    n = SIM_LENGTHS.get(length, SIM_LENGTHS["medium"])
+    sym = (symbol or "").strip().upper()
+    if sym and not _TICKER_RE.match(sym):
+        return {"error": "That isn't a valid ticker.", "status": 400}
+    tried = [sym] if sym else random.sample(SIM_POOL, len(SIM_POOL))
+    hist, name = [], ""
+    for cand in tried[:6]:
+        try:
+            q = yahoo_quote(cand, range_="5y", interval="1d")
+        except Exception:  # noqa: BLE001
+            continue
+        pts = [p for p in (q.get("history") or [])
+               if all(p.get(k) for k in ("t", "o", "h", "l", "c"))]
+        if len(pts) >= SIM_WARMUP + n + 1:
+            hist, sym, name = pts, cand, q.get("name") or cand
+            break
+    if not hist:
+        return {"error": "Couldn't load enough price history for that stock.", "status": 400}
+
+    start = random.randint(0, len(hist) - (SIM_WARMUP + n + 1))
+    window = hist[start:start + SIM_WARMUP + n + 1]
+    base = window[SIM_WARMUP]["c"]
+    s = {
+        "id": secrets.token_urlsafe(9), "user": user, "symbol": sym, "name": name,
+        "blind": bool(blind),
+        # Mystery mode rebases so day 0 closes at exactly $100: the real price
+        # level would otherwise give the stock away.
+        "scale": (100.0 / base) if blind else 1.0,
+        "window": window, "cursor": SIM_WARMUP,
+        "cash": SIM_CASH, "shares": 0, "trades": [], "equityCurve": [SIM_CASH],
+        "touched": time.time(),
+    }
+    with _SIM_LOCK:
+        _sim_gc()
+        mine = sorted((v for v in _SIM.values() if v["user"] == user), key=lambda v: v["touched"])
+        for old in mine[:max(0, len(mine) - SIM_MAX_SESSIONS + 1)]:
+            _SIM.pop(old["id"], None)
+        _SIM[s["id"]] = s
+    return {"ok": True, **_sim_state(s),
+            "candles": [_sim_candle(s, i) for i in range(SIM_WARMUP + 1)]}
+
+
+def sim_step(user: str, sid: str, action: str = "hold", shares=0, advance=1) -> dict:
+    if not is_admin_username(user):
+        return {"error": "Not found.", "status": 404}
+    with _SIM_LOCK:
+        s = _SIM.get(sid)
+        if not s or s["user"] != user:
+            return {"error": "That simulation has expired. Start a new one.", "status": 404}
+        s["touched"] = time.time()
+        end_i = len(s["window"]) - 1
+        if s["cursor"] >= end_i:
+            return {"error": "This simulation is finished.", "status": 400}
+
+        # 1) Trade at today's close.
+        price = s["window"][s["cursor"]]["c"] * s["scale"]
+        try:
+            qty = int(float(shares or 0))
+        except Exception:  # noqa: BLE001
+            qty = 0
+        if action in ("buy", "sell") and qty <= 0:
+            return {"error": "Enter a number of shares.", "status": 400}
+        if action == "buy":
+            if qty * price > s["cash"] + 1e-6:
+                return {"error": f"Not enough cash for {qty} shares.", "status": 400}
+            s["cash"] -= qty * price
+            s["shares"] += qty
+        elif action == "sell":
+            if qty > s["shares"]:
+                return {"error": f"You only hold {s['shares']} shares.", "status": 400}
+            s["cash"] += qty * price
+            s["shares"] -= qty
+        if action in ("buy", "sell"):
+            s["trades"].append({"day": s["cursor"] - SIM_WARMUP, "side": action,
+                                "shares": qty, "price": round(price, 4)})
+            # Keep today's point on the equity curve current after a trade.
+            s["equityCurve"][-1] = s["cash"] + s["shares"] * price
+
+        # 2) Advance — revealing only the days that have now happened. advance=0
+        #    means "trade only, stay on today".
+        if advance == "end":
+            steps = end_i - s["cursor"]
+        else:
+            try:
+                steps = max(0, min(int(advance), 30))
+            except Exception:  # noqa: BLE001
+                steps = 1
+        first_new = s["cursor"] + 1
+        s["cursor"] = min(end_i, s["cursor"] + steps)
+        for i in range(first_new, s["cursor"] + 1):
+            p = s["window"][i]["c"] * s["scale"]
+            s["equityCurve"].append(s["cash"] + s["shares"] * p)
+        new = [_sim_candle(s, i) for i in range(first_new, s["cursor"] + 1)]
+        return {"ok": True, **_sim_state(s), "candles": new}
+
+
+# ---------- Stocks Browser: research the web without leaving FAAM ----------
+# The AI runs a live web search (the model's built-in web search) and writes a short,
+# cited brief. "Sources" narrows the search to particular outlets. The page's
+# look (FAAM / Portal / Broadsheet) is presentation only and lives in the page.
+SB_MODEL = os.environ.get("FAAM_SEARCH_MODEL", "gpt-5-mini")
+SB_URL = "https://api.openai.com/v1/responses"
+SB_PRICING = (0.25, 2.00)          # $ per 1M input / output tokens (gpt-5-mini)
+SB_CALL_COST = 0.01                # the web search tool: $10 per 1,000 searches
+SB_HOURLY = 40                     # searches per person per hour (cached repeats are free)
+SB_CACHE_TTL = 600
+SB_CACHE_MAX = 200
+SB_QUERY_MAX = 300
+SB_SOURCES = {
+    "web": {"label": "All the web", "domains": []},
+    "news": {"label": "Business news", "domains": [
+        "reuters.com", "wsj.com", "cnbc.com", "bloomberg.com", "ft.com", "apnews.com",
+        "marketwatch.com", "barrons.com", "finance.yahoo.com"]},
+    "yahoo": {"label": "Yahoo Finance", "domains": ["finance.yahoo.com"]},
+    "wsj": {"label": "WSJ", "domains": ["wsj.com"]},
+    "reuters": {"label": "Reuters", "domains": ["reuters.com"]},
+    "cnbc": {"label": "CNBC", "domains": ["cnbc.com"]},
+    "sec": {"label": "SEC filings", "domains": ["sec.gov"]},
+}
+SB_SYSTEM = (
+    "You are the FAAM Stocks Browser, a research assistant for everyday investors. "
+    "Search the web, then write a clear brief that answers the reader's question.\n"
+    "Rules:\n"
+    "- Use only what your search found and cite it. If you can't find something, say so.\n"
+    "- Open with the direct answer in one or two sentences, then two to four short "
+    "paragraphs of context: what happened, why it matters, what to watch.\n"
+    "- Give dates for news (\"on Oct 7\") and say when something may be out of date.\n"
+    "- Plain text only: no markdown, headings, bullet symbols or bold, and don't label "
+    "paragraphs (no \"Direct answer:\" or \"Why it matters:\").\n"
+    "- Explain any jargon in a few plain words.\n"
+    "- Never tell the reader to buy, sell or hold anything, and don't predict prices. "
+    "This is information, not financial advice.\n"
+    "- Summarize in your own words; quote at most one short phrase from any source.\n"
+    "- On the very last line write TICKERS: followed by up to three stock tickers the "
+    "question is about, comma-separated, or TICKERS: NONE."
+)
+_SB_CACHE: dict = {}
+_SB_RATE: dict = {}
+_SB_LOCK = threading.Lock()
+_SB_TICKER_LINE = re.compile(r"TICKERS:[ \t]*([^\n]*)", re.I)
+_SB_LABEL = re.compile(
+    r"^(direct answer|short answer|the short answer|answer|summary|what happened|why it matters|"
+    r"what to watch(?: next)?|context|bottom line|key points?)(\s*\([^)]{0,60}\))?\s*[:\u2014-]\s*", re.I)
+_MD_CITE = re.compile(r"[ \t]*\(\[([^\]]*)\]\((https?://[^)\s]+)\)\)")
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+
+
+def _sb_clean_url(url) -> str:
+    """http(s) only, without tracking parameters or fragments."""
+    try:
+        u = urllib.parse.urlparse(str(url or "").strip())
+    except ValueError:
+        return ""
+    if u.scheme not in ("http", "https") or not u.hostname or len(str(url)) > 800:
+        return ""
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(u.query, keep_blank_values=True)
+         if not k.lower().startswith("utm_")]
+    return urllib.parse.urlunparse(u._replace(query=urllib.parse.urlencode(q), fragment=""))
+
+
+def _sb_domain(url: str) -> str:
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def sb_parse(result: dict) -> dict:
+    """Turn a Responses API result into paragraphs with [[n]] citation markers,
+    a numbered source list, other pages the search looked at, and tickers."""
+    text, anns, consulted, searches = "", [], [], 0
+    for item in result.get("output") or []:
+        if item.get("type") == "web_search_call":
+            searches += 1
+            for s in ((item.get("action") or {}).get("sources") or []):
+                u = _sb_clean_url(s.get("url"))
+                if u and u not in consulted:
+                    consulted.append(u)
+        elif item.get("type") == "message":
+            for c in item.get("content") or []:
+                if c.get("type") != "output_text":
+                    continue
+                base = len(text)
+                text += c.get("text") or ""
+                for a in c.get("annotations") or []:
+                    if a.get("type") == "url_citation":
+                        anns.append({"url": a.get("url"), "title": a.get("title"),
+                                     "s": base + int(a.get("start_index") or 0),
+                                     "e": base + int(a.get("end_index") or 0)})
+    sources, index = [], {}
+
+    def cite(url, title) -> str:
+        url = _sb_clean_url(url)
+        if not url:
+            return ""
+        if url not in index:
+            index[url] = len(sources) + 1
+            sources.append({"n": index[url], "url": url, "domain": _sb_domain(url),
+                            "title": " ".join(str(title or _sb_domain(url)).split())[:200]})
+        return f"[[{index[url]}]]"
+
+    out, pos = [], 0
+    for a in sorted(anns, key=lambda a: a["s"]):
+        if a["s"] < pos or a["e"] > len(text) or a["s"] >= a["e"]:
+            continue                      # a span that doesn't line up: leave the text alone
+        out.append(text[pos:a["s"]].rstrip(" \t"))
+        out.append(cite(a["url"], a["title"]))
+        pos = a["e"]
+    out.append(text[pos:])
+    text = "".join(out)
+    tickers = []
+    m = None
+    for m in _SB_TICKER_LINE.finditer(text):    # the last one; it isn't always on its own line
+        pass
+    if m:
+        for t in re.split(r"[,\s]+", m.group(1).upper()):
+            t = t.strip("$.")
+            if t and t != "NONE" and _TICKER_RE.match(t) and t not in tickers:
+                tickers.append(t)
+        text = text[:m.start()].rstrip() + text[m.end():]
+    text = _MD_CITE.sub(lambda m: cite(m.group(2), m.group(1)), text)
+    text = _MD_LINK.sub(lambda m: m.group(1) + cite(m.group(2), m.group(1)), text)
+    text = re.sub(r"[ \t]*\(\[[^\]]*\]\([^)]*\)\)", "", text)   # leftover links with no usable URL
+    text = re.sub(r"\[\s*\]\([^)]*\)|\(\s*\)", "", text)
+    text = re.sub(r"[ \t]+([.,;:!?])", r"\1", text)
+    text = re.sub(r"\*\*|__", "", text)
+    text = re.sub(r"^\s*(#+|[-*•]\s)\s*", "", text, flags=re.M)
+    paras = [re.sub(r"[ \t]+", " ", p).strip() for p in re.split(r"\n\s*\n", text)]
+    paras = [_SB_LABEL.sub("", p, count=1) for p in paras]
+    paras = [p[0].upper() + p[1:] if p else p for p in paras]
+    return {"paragraphs": [p for p in paras if p], "sources": sources,
+            "more": [{"url": u, "domain": _sb_domain(u)} for u in consulted if u not in index][:8],
+            "tickers": tickers[:3], "searches": searches}
+
+
+def _sb_responses(instructions: str, prompt: str, domains: list) -> dict:
+    tool = {"type": "web_search"}
+    if domains:
+        tool["filters"] = {"allowed_domains": domains}
+    payload = {"model": SB_MODEL, "instructions": instructions, "input": prompt,
+               "tools": [tool], "include": ["web_search_call.action.sources"],
+               "max_output_tokens": 3000}
+    if SB_MODEL.startswith(("gpt-5", "o")):
+        payload["reasoning"] = {"effort": "low"}
+    req = urllib.request.Request(
+        SB_URL, data=json.dumps(payload).encode("utf-8"), method="POST",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return {"error": f"AI service error {e.code}",
+                "detail": e.read().decode("utf-8", errors="replace")[:500]}
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return {"error": f"network error: {e}"}
+
+
+def _sb_cost(result: dict, searches: int) -> float:
+    u = result.get("usage") or {}
+    ri, ro = SB_PRICING
+    return (u.get("input_tokens", 0) / 1e6 * ri + u.get("output_tokens", 0) / 1e6 * ro
+            + searches * SB_CALL_COST)
+
+
+def sb_quote_card(tickers: list):
+    """Live quote + headlines for the first ticker that resolves."""
+    for t in tickers[:3]:
+        try:
+            q = yahoo_quote(t, range_="1mo", interval="1d")
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(q, dict) or q.get("error") or not q.get("price"):
+            continue
+        sym = q.get("symbol") or t
+        name = q.get("name") or sym
+        return {"symbol": sym, "name": name, "price": q.get("price"),
+                "change": q.get("change"), "pct": q.get("pct"),
+                "spark": [p.get("c") for p in (q.get("history") or []) if p.get("c")][-30:],
+                "news": _sb_relevant_news(sym, name)}
+    return None
+
+
+_SB_GENERIC_NAMES = {"the", "advanced", "american", "international", "general", "united",
+                     "first", "global", "national", "new", "royal", "bank", "capital"}
+
+
+def _sb_relevant_news(symbol: str, name: str) -> list:
+    """Headlines that mention the company. Yahoo's news search for a ticker mixes
+    in general market stories, which would look like they're about this stock."""
+    keys = {symbol.lower().split(".")[0]}
+    first = re.sub(r"[^a-z0-9]", "", (name or "").split(" ")[0].lower()) if name else ""
+    if len(first) >= 3 and first not in _SB_GENERIC_NAMES:
+        keys.add(first)
+    pat = re.compile(r"\b(" + "|".join(re.escape(k) for k in keys) + r")\b", re.I)
+    return [n for n in fetch_news(symbol, 12) if pat.search(n.get("title") or "")][:5]
+
+
+def _sb_rate_ok(username: str) -> bool:
+    now = time.time()
+    with _SB_LOCK:
+        hits = [t for t in _SB_RATE.get(username, []) if now - t < 3600]
+        ok = len(hits) < SB_HOURLY
+        if ok:
+            hits.append(now)
+        _SB_RATE[username] = hits
+        return ok
+
+
+def stocks_browser_search(username: str, query, source="web", url="") -> dict:
+    """One Stocks Browser search (or, with url, a summary of one page)."""
+    query = " ".join(str(query or "").split())[:SB_QUERY_MAX]
+    source = source if source in SB_SOURCES else "web"
+    page = _sb_clean_url(url) if url else ""
+    if url and not page:
+        return {"error": "That link can't be opened here.", "status": 400}
+    if not page and len(query) < 2:
+        return {"error": "Type something to search for.", "status": 400}
+    if not OPENAI_API_KEY:
+        return {"error": "Search is not available right now.", "status": 503}
+    key = (source, query.lower(), page)
+    now = time.time()
+    with _SB_LOCK:
+        hit = _SB_CACHE.get(key)
+    if hit and now - hit[0] < SB_CACHE_TTL:
+        return {**hit[1], "cached": True}
+    if not _sb_rate_ok(username):
+        return {"error": f"That's {SB_HOURLY} searches this hour. Try again a little later.",
+                "status": 429}
+    if page:
+        instructions = SB_SYSTEM + (
+            "\nThe reader wants a summary of one specific page. Find it and summarize its key "
+            "points in three to five short paragraphs. If you can't reach that exact page, say "
+            "in a few plain words that you're summarizing coverage of the same story instead; "
+            "don't mention technical errors.")
+        prompt = f"Summarize this page: {query or page}\nURL: {page}"
+        domains = [_sb_domain(page)]
+    else:
+        instructions = SB_SYSTEM
+        prompt = f"Today is {datetime.now():%A, %B %d, %Y}.\nQuestion: {query}"
+        domains = SB_SOURCES[source]["domains"]
+    result = _sb_responses(instructions, prompt, domains)
+    if result.get("error"):
+        return {"error": "Search is unavailable right now. Try again in a moment.", "status": 502}
+    parsed = sb_parse(result)
+    record_cost(_sb_cost(result, max(1, parsed["searches"])))
+    if not parsed["paragraphs"]:
+        return {"error": "The search came back empty. Try wording it differently.", "status": 502}
+    tickers = parsed.pop("tickers")
+    out = {"ok": True, "query": query, "source": source, "page": page,
+           "sourceLabel": SB_SOURCES[source]["label"], **parsed,
+           "quote": sb_quote_card(tickers), "searchedAt": int(now)}
+    with _SB_LOCK:
+        if len(_SB_CACHE) >= SB_CACHE_MAX:
+            for k in sorted(_SB_CACHE, key=lambda k: _SB_CACHE[k][0])[:SB_CACHE_MAX // 4]:
+                _SB_CACHE.pop(k, None)
+        _SB_CACHE[key] = (now, out)
+    return {**out, "cached": False}
+
+
+# ---------- Price alerts & notifications ----------
+# People set alerts ("NVDA rises to $200", "AAPL down 5% today"). A background
+# thread checks them every minute; a hit becomes a notification in the bell
+# menu and, in the Mac app, a macOS notification. Alerts fire once, then wait
+# to be re-armed, so a stock hovering at the line doesn't ping every minute.
+ALERTS_FILE = DATA_DIR / "alerts.json"
+NOTIFS_FILE = DATA_DIR / "notifications.json"
+ALERT_KINDS = ("above", "below", "up", "down")
+ALERTS_MAX = 50
+NOTIFS_MAX = 100
+ALERT_INTERVAL = max(15, int(os.environ.get("FAAM_ALERT_INTERVAL", "60")))
+# Only the copy of FAAM running on someone's own Mac can show macOS notifications.
+DESKTOP_NOTIFS = (sys.platform == "darwin" and BIND_HOST in ("127.0.0.1", "localhost")
+                  and os.environ.get("FAAM_DESKTOP_NOTIFY", "1") != "0")
+_ALERT_LOCK = threading.RLock()
+
+
+def _alerts_all() -> dict:
+    d = _load_json(ALERTS_FILE, {})
+    return d if isinstance(d, dict) else {}
+
+
+def _notifs_all() -> dict:
+    d = _load_json(NOTIFS_FILE, {})
+    return d if isinstance(d, dict) else {}
+
+
+def alert_label(a: dict) -> str:
+    v = float(a.get("value") or 0)
+    sym = a.get("symbol", "")
+    return {"above": f"{sym} rises to ${v:,.2f}", "below": f"{sym} falls to ${v:,.2f}",
+            "up": f"{sym} is up {v:g}% today", "down": f"{sym} is down {v:g}% today"
+            }.get(a.get("kind"), sym)
+
+
+def _alert_hit(a: dict, price: float, pct: float) -> bool:
+    v = float(a.get("value") or 0)
+    return {"above": price >= v, "below": price <= v,
+            "up": pct >= v, "down": pct <= -v}.get(a.get("kind"), False)
+
+
+def _public_alert(a: dict) -> dict:
+    return {**a, "label": alert_label(a)}
+
+
+def alerts_list(username: str) -> list:
+    mine = _alerts_all().get(username) or []
+    return [_public_alert(a) for a in sorted(
+        mine, key=lambda a: (not a.get("active"), -int(a.get("created") or 0)))]
+
+
+def alerts_create(username: str, symbol, kind, value) -> dict:
+    sym = str(symbol or "").strip().upper().lstrip("$")
+    if not _TICKER_RE.match(sym):
+        return {"error": "Enter a stock symbol like NVDA.", "status": 400}
+    if kind not in ALERT_KINDS:
+        return {"error": "Pick when to alert you.", "status": 400}
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return {"error": "Enter a number.", "status": 400}
+    if math.isnan(v) or math.isinf(v):
+        return {"error": "Enter a number.", "status": 400}
+    if kind in ("above", "below") and not (0 < v < 1e7):
+        return {"error": "Enter a price above $0.", "status": 400}
+    if kind in ("up", "down") and not (0.1 <= v <= 100):
+        return {"error": "Enter a move between 0.1% and 100%.", "status": 400}
+    try:
+        q = yahoo_quote(sym, range_="1d", interval="5m")
+    except Exception:  # noqa: BLE001
+        q = {"error": "lookup failed"}
+    if not isinstance(q, dict) or q.get("error") or not q.get("price"):
+        return {"error": f"Couldn't find {sym}.", "status": 400}
+    price, pct = float(q.get("price") or 0), float(q.get("pct") or 0)
+    alert = {"id": uuid.uuid4().hex[:10], "symbol": q.get("symbol") or sym, "kind": kind,
+             "value": round(v, 4), "created": int(time.time()), "active": True,
+             "triggeredAt": 0, "triggerPrice": None, "startPrice": round(price, 4)}
+    with _ALERT_LOCK:
+        d = _alerts_all()
+        mine = d.get(username) or []
+        if len(mine) >= ALERTS_MAX:
+            return {"error": f"That's the limit of {ALERTS_MAX} alerts. Delete one first.",
+                    "status": 400}
+        mine.append(alert)
+        d[username] = mine
+        _save_json(ALERTS_FILE, d)
+    return {"ok": True, "alert": _public_alert(alert), "alerts": alerts_list(username),
+            "price": price, "pct": pct, "alreadyMet": _alert_hit(alert, price, pct)}
+
+
+def _alerts_edit(username: str, alert_id: str, fn) -> dict:
+    with _ALERT_LOCK:
+        d = _alerts_all()
+        mine = d.get(username) or []
+        target = next((a for a in mine if a.get("id") == alert_id), None)
+        if not target:
+            return {"error": "No such alert.", "status": 404}
+        d[username] = fn(mine, target)
+        _save_json(ALERTS_FILE, d)
+    return {"ok": True, "alerts": alerts_list(username)}
+
+
+def alerts_delete(username: str, alert_id: str) -> dict:
+    return _alerts_edit(username, alert_id, lambda mine, t: [a for a in mine if a is not t])
+
+
+def alerts_rearm(username: str, alert_id: str) -> dict:
+    def rearm(mine, t):
+        t.update(active=True, triggeredAt=0, triggerPrice=None)
+        return mine
+    return _alerts_edit(username, alert_id, rearm)
+
+
+def notify(username: str, title: str, body: str, kind: str = "info",
+           symbol: str = "", ref: str = "", desktop: bool = False) -> dict:
+    n = {"id": uuid.uuid4().hex[:12], "kind": kind, "title": str(title)[:120],
+         "body": str(body)[:300], "symbol": symbol, "ref": ref, "ts": int(time.time()),
+         "read": False}
+    with _ALERT_LOCK:
+        d = _notifs_all()
+        d[username] = ([n] + (d.get(username) or []))[:NOTIFS_MAX]
+        _save_json(NOTIFS_FILE, d)
+    if desktop:
+        desktop_notify(n["title"], n["body"])
+    return n
+
+
+def notify_everyone(title: str, body: str, kind: str, ref: str = "", skip: str = "") -> None:
+    """Fan a notification out to every account (Stock Paper stories)."""
+    now = int(time.time())
+    with _ALERT_LOCK:
+        d = _notifs_all()
+        for username in load_users():
+            if username == skip:
+                continue
+            n = {"id": uuid.uuid4().hex[:12], "kind": kind, "title": str(title)[:120],
+                 "body": str(body)[:300], "symbol": "", "ref": ref, "ts": now, "read": False}
+            d[username] = ([n] + (d.get(username) or []))[:NOTIFS_MAX]
+        _save_json(NOTIFS_FILE, d)
+
+
+def desktop_notify(title: str, body: str) -> None:
+    """A macOS notification. Text goes in as arguments, never into the script,
+    so a headline can't inject AppleScript."""
+    if not DESKTOP_NOTIFS:
+        return
+    script = ("on run argv\n"
+              "display notification (item 2 of argv) with title (item 1 of argv) "
+              "sound name \"Glass\"\nend run")
+    try:
+        subprocess.Popen(["/usr/bin/osascript", "-e", script, str(title)[:120], str(body)[:240]],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def notifs_list(username: str) -> dict:
+    items = _notifs_all().get(username) or []
+    return {"items": items, "unread": sum(1 for n in items if not n.get("read")),
+            "desktop": DESKTOP_NOTIFS}
+
+
+def notifs_read(username: str, ids=None) -> dict:
+    want = set(ids) if isinstance(ids, list) else None
+    with _ALERT_LOCK:
+        d = _notifs_all()
+        for n in d.get(username) or []:
+            if want is None or n.get("id") in want:
+                n["read"] = True
+        _save_json(NOTIFS_FILE, d)
+    return {"ok": True, **notifs_list(username)}
+
+
+def notifs_clear(username: str) -> dict:
+    with _ALERT_LOCK:
+        d = _notifs_all()
+        d.pop(username, None)
+        _save_json(NOTIFS_FILE, d)
+    return {"ok": True, **notifs_list(username)}
+
+
+def alerts_check_once() -> int:
+    """Check every active alert against a live quote. Returns how many fired."""
+    with _ALERT_LOCK:
+        symbols = sorted({a.get("symbol") for mine in _alerts_all().values()
+                          for a in (mine or []) if a.get("active")})
+    if not symbols:
+        return 0
+    quotes = {}
+    for sym in symbols:                       # network outside the lock
+        try:
+            q = yahoo_quote(sym, range_="1d", interval="5m")
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(q, dict) and not q.get("error") and q.get("price"):
+            quotes[sym] = (float(q["price"]), float(q.get("pct") or 0))
+    fired = []
+    now = int(time.time())
+    with _ALERT_LOCK:
+        d = _alerts_all()
+        for username, mine in d.items():
+            for a in mine or []:
+                qp = quotes.get(a.get("symbol"))
+                if not a.get("active") or not qp or not _alert_hit(a, *qp):
+                    continue
+                price, pct = qp
+                a.update(active=False, triggeredAt=now, triggerPrice=round(price, 4))
+                fired.append((username, a, price, pct))
+        if fired:
+            _save_json(ALERTS_FILE, d)
+    for username, a, price, pct in fired:
+        notify(username, f"{alert_label(a)}",
+               f"{a['symbol']} is at ${price:,.2f} ({pct:+.2f}% today).",
+               kind="price", symbol=a["symbol"], ref=a["id"], desktop=True)
+    return len(fired)
+
+
+def alerts_loop() -> None:
+    while True:
+        time.sleep(ALERT_INTERVAL)
+        try:
+            alerts_check_once()
+        except Exception as e:  # noqa: BLE001
+            print(f"   ⚠ alert check failed: {e}")
+
+
+# ---------- FAAM Connect: sign FAAM's other apps in to a FAAM account ----------
+# The standard native-app OAuth flow (authorization code + PKCE):
+#   1. The app opens /connect?client_id=…&redirect_uri=…&state=…&code_challenge=…
+#   2. The signed-in user taps Connect; FAAM sends them back with a one-time code.
+#   3. The app trades that code and its PKCE verifier at /api/connect/token for an
+#      access token, then calls /api/v1/* with  Authorization: Bearer <token>.
+# Only the dev account can register apps, so every app listed here is FAAM's own.
+# The app never sees the user's password, and tokens are stored only as hashes.
+CONNECT_FILE = DATA_DIR / "connect.json"
+CONNECT_CODE_TTL = 600                     # one-time codes live 10 minutes
+CONNECT_TOKEN_TTL = 90 * 86400             # access tokens live 90 days
+CONNECT_TOKENS_PER_APP = 5                 # per user; reconnecting retires the oldest
+CONNECT_MAX_APPS = 20
+CONNECT_WATCHLIST_MAX = 100
+CONNECT_PORTFOLIO_MAX = 500
+CONNECT_BUILTIN = {
+    "faam-ios": {"name": "FAAM iOS App", "redirectUris": ["faam://connected"]},
+}
+# What the Connect screen lists. The /api/v1 routes below are exactly this.
+CONNECT_ACCESS = [
+    "See and edit your watchlist",
+    "See and edit your portfolio",
+    "See your practice trading account",
+    "See your FAAM Learn progress",
+]
+_CONNECT_LOCK = threading.RLock()
+_CONNECT_CODES: dict = {}                  # sha256(code) -> grant (memory only)
+_CONNECT_RATE: dict = {}
+_CLIENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
+_PKCE_VERIFIER_RE = re.compile(r"^[A-Za-z0-9._~-]{43,128}$")
+_PKCE_CHALLENGE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+_APP_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]{1,30}$")
+
+
+def _secret_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _connect_load() -> dict:
+    d = _load_json(CONNECT_FILE, None)
+    if not isinstance(d, dict):            # first run: FAAM's own apps come registered
+        now = int(time.time())
+        d = {"apps": {cid: {**a, "builtin": True, "created": now}
+                      for cid, a in CONNECT_BUILTIN.items()}, "tokens": {}}
+    if not isinstance(d.get("apps"), dict):
+        d["apps"] = {}
+    if not isinstance(d.get("tokens"), dict):
+        d["tokens"] = {}
+    return d
+
+
+def _connect_save(d: dict) -> bool:
+    ok = _save_json(CONNECT_FILE, d)
+    try:
+        os.chmod(CONNECT_FILE, 0o600)
+    except OSError:
+        pass
+    return ok
+
+
+def connect_redirect_ok(uri: str) -> bool:
+    """A place FAAM may send someone back to: the app's own URL scheme
+    (faam://…), an https page, or http on this machine for testing."""
+    if not isinstance(uri, str) or not uri or len(uri) > 200:
+        return False
+    if any(c.isspace() for c in uri) or "#" in uri:
+        return False
+    try:
+        u = urllib.parse.urlparse(uri)
+    except ValueError:
+        return False
+    scheme = (u.scheme or "").lower()
+    if scheme in ("javascript", "data", "vbscript", "file", "blob", "about", "ftp", "ws", "wss"):
+        return False
+    if scheme == "https":
+        return bool(u.hostname)
+    if scheme == "http":
+        return u.hostname in ("localhost", "127.0.0.1")
+    return bool(_APP_SCHEME_RE.match(scheme)) and bool(u.netloc or u.path)
+
+
+def _with_params(uri: str, params: dict) -> str:
+    q = urllib.parse.urlencode({k: v for k, v in params.items() if v})
+    return uri + ("&" if "?" in uri else "?") + q
+
+
+def _connect_check(params: dict):
+    """Validate a /connect request. Returns (app, None) or (None, error dict).
+    Nothing is ever redirected until the app and its return address check out."""
+    cid = str(params.get("client_id") or "")
+    redirect = str(params.get("redirect_uri") or "")
+    app = _connect_load()["apps"].get(cid) if _CLIENT_ID_RE.match(cid) else None
+    if not app:
+        return None, {"error": "This app isn't registered with FAAM.", "status": 400}
+    if redirect not in (app.get("redirectUris") or []):
+        return None, {"error": "This app's return address doesn't match what FAAM has on file.",
+                      "status": 400}
+    if str(params.get("response_type") or "code") != "code":
+        return None, {"error": "Unsupported response_type.", "status": 400}
+    method = str(params.get("code_challenge_method") or "S256")
+    if method != "S256" or not _PKCE_CHALLENGE_RE.match(str(params.get("code_challenge") or "")):
+        return None, {"error": "The app sent an invalid sign-in challenge (PKCE S256 required).",
+                      "status": 400}
+    if len(str(params.get("state") or "")) > 200:
+        return None, {"error": "The app's state value is too long.", "status": 400}
+    return {**app, "clientId": cid}, None
+
+
+def connect_info(username: str, params: dict) -> dict:
+    app, err = _connect_check(params)
+    if err:
+        return err
+    return {"ok": True, "app": {"clientId": app["clientId"], "name": app["name"]},
+            "username": username, "access": CONNECT_ACCESS}
+
+
+def connect_approve(username: str, params: dict, approve: bool) -> dict:
+    params = {k: v if isinstance(v, str) else "" for k, v in params.items()}
+    app, err = _connect_check(params)
+    if err:
+        return err
+    redirect, state = params["redirect_uri"], str(params.get("state") or "")
+    if not approve:
+        return {"ok": True, "redirect": _with_params(redirect, {"error": "access_denied",
+                                                                 "state": state})}
+    code = secrets.token_urlsafe(32)
+    now = time.time()
+    with _CONNECT_LOCK:
+        for k in [k for k, g in _CONNECT_CODES.items() if g["exp"] < now]:
+            _CONNECT_CODES.pop(k, None)
+        _CONNECT_CODES[_secret_hash(code)] = {
+            "user": username, "clientId": app["clientId"], "redirect": redirect,
+            "challenge": params["code_challenge"], "exp": now + CONNECT_CODE_TTL,
+        }
+    return {"ok": True, "app": app["name"],
+            "redirect": _with_params(redirect, {"code": code, "state": state})}
+
+
+def _connect_rate_ok(key: str, limit: int = 30, window: int = 60) -> bool:
+    now = time.time()
+    with _CONNECT_LOCK:
+        hits = [t for t in _CONNECT_RATE.get(key, []) if now - t < window]
+        if len(hits) >= limit:
+            _CONNECT_RATE[key] = hits
+            return False
+        hits.append(now)
+        _CONNECT_RATE[key] = hits
+        return True
+
+
+def connect_token(body: dict, client_ip: str = "") -> dict:
+    """Trade a one-time code for an access token (OAuth 2 token endpoint)."""
+    def fail(code, desc, status=400):
+        return {"error": code, "error_description": desc, "status": status}
+    if not _connect_rate_ok(f"tok|{client_ip}"):
+        return fail("slow_down", "Too many requests. Try again in a minute.", 429)
+    if str(body.get("grant_type") or "") != "authorization_code":
+        return fail("unsupported_grant_type", "Use grant_type=authorization_code.")
+    code = str(body.get("code") or "")
+    verifier = str(body.get("code_verifier") or "")
+    with _CONNECT_LOCK:
+        grant = _CONNECT_CODES.pop(_secret_hash(code), None) if code else None   # single use
+    if not grant or grant["exp"] < time.time():
+        return fail("invalid_grant", "That code is invalid or expired. Connect again.")
+    if str(body.get("client_id") or "") != grant["clientId"] or \
+            str(body.get("redirect_uri") or "") != grant["redirect"]:
+        return fail("invalid_grant", "That code was issued to a different app.")
+    if not _PKCE_VERIFIER_RE.match(verifier):
+        return fail("invalid_grant", "Missing or malformed code_verifier.")
+    want = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    if not hmac.compare_digest(want, grant["challenge"]):
+        return fail("invalid_grant", "The code_verifier doesn't match.")
+    token = "faam_" + secrets.token_urlsafe(32)
+    now = int(time.time())
+    with _CONNECT_LOCK:
+        d = _connect_load()
+        app = d["apps"].get(grant["clientId"])
+        if not app or grant["user"] not in load_users():
+            return fail("invalid_grant", "That app or account no longer exists.")
+        toks = {k: t for k, t in d["tokens"].items() if t.get("expires", 0) > now}
+        mine = sorted((k for k, t in toks.items()
+                       if t.get("user") == grant["user"] and t.get("clientId") == grant["clientId"]),
+                      key=lambda k: toks[k].get("created", 0))
+        for k in mine[:max(0, len(mine) - (CONNECT_TOKENS_PER_APP - 1))]:
+            toks.pop(k, None)
+        toks[_secret_hash(token)] = {"user": grant["user"], "clientId": grant["clientId"],
+                                     "created": now, "expires": now + CONNECT_TOKEN_TTL,
+                                     "lastUsed": now}
+        d["tokens"] = toks
+        _connect_save(d)
+    return {"access_token": token, "token_type": "Bearer", "expires_in": CONNECT_TOKEN_TTL,
+            "username": grant["user"], "app": app["name"], "access": CONNECT_ACCESS}
+
+
+def connect_token_user(token: str):
+    """The account a Bearer token belongs to, or None."""
+    if not token or not token.startswith("faam_") or len(token) > 100:
+        return None
+    key = _secret_hash(token)
+    now = int(time.time())
+    with _CONNECT_LOCK:
+        d = _connect_load()
+        t = d["tokens"].get(key)
+        if not t or t.get("expires", 0) < now or t.get("clientId") not in d["apps"]:
+            return None
+        if t.get("user") not in load_users():
+            return None
+        if now - int(t.get("lastUsed") or 0) > 3600:     # don't write on every call
+            t["lastUsed"] = now
+            _connect_save(d)
+        return {"username": t["user"], "clientId": t["clientId"],
+                "app": d["apps"][t["clientId"]].get("name", "")}
+
+
+def connect_my_apps(username: str) -> list:
+    d = _connect_load()
+    now = int(time.time())
+    out: dict = {}
+    for t in d["tokens"].values():
+        if t.get("user") != username or t.get("expires", 0) < now:
+            continue
+        cid = t.get("clientId")
+        app = d["apps"].get(cid)
+        if not app:
+            continue
+        row = out.setdefault(cid, {"clientId": cid, "name": app.get("name", cid),
+                                   "connected": t.get("created", 0), "lastUsed": 0})
+        row["connected"] = min(row["connected"], t.get("created", 0))
+        row["lastUsed"] = max(row["lastUsed"], t.get("lastUsed", 0))
+    return sorted(out.values(), key=lambda r: -r["lastUsed"])
+
+
+def connect_disconnect(username: str, client_id: str) -> dict:
+    with _CONNECT_LOCK:
+        d = _connect_load()
+        before = len(d["tokens"])
+        d["tokens"] = {k: t for k, t in d["tokens"].items()
+                       if not (t.get("user") == username and t.get("clientId") == client_id)}
+        if len(d["tokens"]) != before:
+            _connect_save(d)
+    return {"ok": True, "apps": connect_my_apps(username)}
+
+
+# ---- Dev only: register FAAM's apps. Everyone else gets a plain 404.
+def connect_dev_apps(username: str) -> dict:
+    if not is_admin_username(username):
+        return {"error": "Not found.", "status": 404}
+    d = _connect_load()
+    users: dict = {}
+    now = int(time.time())
+    for t in d["tokens"].values():
+        if t.get("expires", 0) > now:
+            users.setdefault(t.get("clientId"), set()).add(t.get("user"))
+    return {"ok": True, "apps": [
+        {"clientId": cid, "name": a.get("name", cid), "redirectUris": a.get("redirectUris", []),
+         "builtin": bool(a.get("builtin")), "users": len(users.get(cid, ()))}
+        for cid, a in sorted(d["apps"].items(), key=lambda kv: kv[1].get("created", 0))]}
+
+
+def connect_dev_create(username: str, name: str, redirect_uri: str) -> dict:
+    if not is_admin_username(username):
+        return {"error": "Not found.", "status": 404}
+    name = " ".join(str(name or "").split())[:40]
+    redirect_uri = str(redirect_uri or "").strip()
+    if len(name) < 2:
+        return {"error": "Give the app a name.", "status": 400}
+    if not connect_redirect_ok(redirect_uri):
+        return {"error": "Use an app link like myapp://connected, or an https:// address.",
+                "status": 400}
+    with _CONNECT_LOCK:
+        d = _connect_load()
+        if len(d["apps"]) >= CONNECT_MAX_APPS:
+            return {"error": f"That's the limit of {CONNECT_MAX_APPS} apps.", "status": 400}
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:28] or "app"
+        cid = f"{slug}-{secrets.token_hex(3)}"
+        d["apps"][cid] = {"name": name, "redirectUris": [redirect_uri],
+                          "created": int(time.time())}
+        _connect_save(d)
+    return {**connect_dev_apps(username), "created": cid}
+
+
+def connect_dev_delete(username: str, client_id: str) -> dict:
+    if not is_admin_username(username):
+        return {"error": "Not found.", "status": 404}
+    with _CONNECT_LOCK:
+        d = _connect_load()
+        if client_id not in d["apps"]:
+            return {"error": "No such app.", "status": 404}
+        d["apps"].pop(client_id)
+        d["tokens"] = {k: t for k, t in d["tokens"].items() if t.get("clientId") != client_id}
+        _connect_save(d)
+    return connect_dev_apps(username)
+
+
+# ---- /api/v1: what a connected app can read and change.
+def _clean_symbols(raw) -> list | None:
+    if not isinstance(raw, list) or len(raw) > CONNECT_WATCHLIST_MAX:
+        return None
+    out = []
+    for s in raw:
+        s = str(s or "").strip().upper()
+        if not _TICKER_RE.match(s):
+            return None
+        if s not in out:
+            out.append(s)
+    return out
+
+
+def _clean_positions(raw) -> list | None:
+    if not isinstance(raw, list) or len(raw) > CONNECT_PORTFOLIO_MAX:
+        return None
+    out = []
+    for p in raw:
+        if not isinstance(p, dict):
+            return None
+        sym = str(p.get("symbol") or "").strip().upper()
+        try:
+            shares, cost = float(p.get("shares")), float(p.get("cost"))
+        except (TypeError, ValueError):
+            return None
+        if not _TICKER_RE.match(sym) or not (0 < shares < 1e9) or not (0 <= cost < 1e7) \
+                or math.isnan(shares) or math.isnan(cost):
+            return None
+        pid = str(p.get("id") or "")
+        out.append({"id": pid if re.fullmatch(r"[0-9a-f]{8}", pid) else uuid.uuid4().hex[:8],
+                    "symbol": sym, "shares": shares, "cost": cost})
+    return out
+
+
+def connect_learn_summary(username: str) -> dict:
+    p = learn_progress(username)
+    return {"xp": int(p.get("xp") or 0), "streakDays": int(p.get("days") or 0),
+            "bestStreakDays": int(p.get("bestDays") or 0),
+            "certificates": sorted((p.get("certs") or {}).keys()),
+            "streakFreezes": len(p.get("freezes") or [])}
+
+
+def connect_api(method: str, path: str, username: str, body: dict) -> dict:
+    """Route one /api/v1 call for an already-authenticated connected app."""
+    user = load_users().get(username) or {}
+    if method == "GET":
+        if path == "/api/v1/me":
+            return {"username": username, "plan": user.get("plan", ""),
+                    "email": user.get("email", "")}
+        if path == "/api/v1/watchlist":
+            return {"symbols": load_watchlist(username)}
+        if path == "/api/v1/portfolio":
+            return {"positions": load_portfolio(username)}
+        if path == "/api/v1/practice":
+            snap = paper_snapshot(username)
+            snap.pop("auth", None)
+            return snap
+        if path == "/api/v1/learn":
+            return connect_learn_summary(username)
+        if path == "/api/v1/export":
+            snap = paper_snapshot(username)
+            snap.pop("auth", None)
+            return {"exportedAt": datetime.now().isoformat(timespec="seconds"),
+                    "username": username, "watchlist": load_watchlist(username),
+                    "portfolio": load_portfolio(username), "practice": snap,
+                    "learn": connect_learn_summary(username)}
+    if method == "POST":
+        if path == "/api/v1/watchlist":
+            symbols = _clean_symbols(body.get("symbols"))
+            if symbols is None:
+                return {"error": f"Send symbols as a list of up to {CONNECT_WATCHLIST_MAX} tickers.",
+                        "status": 400}
+            save_watchlist(symbols, username)
+            return {"ok": True, "symbols": load_watchlist(username)}
+        if path == "/api/v1/portfolio":
+            positions = _clean_positions(body.get("positions"))
+            if positions is None:
+                return {"error": "Send positions as a list of {symbol, shares, cost}.",
+                        "status": 400}
+            save_portfolio(positions, username)
+            return {"ok": True, "positions": load_portfolio(username)}
+    return {"error": "Not found.", "status": 404}
 
 
 # ---------- Windows package (download) ----------
@@ -4530,6 +5926,38 @@ class Handler(SimpleHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError):
             return {}
 
+    def _read_form_or_json(self) -> dict:
+        """OAuth clients (AppAuth and friends) post form-encoded; others send JSON."""
+        ctype = (self.headers.get("Content-Type") or "").lower()
+        if "application/x-www-form-urlencoded" not in ctype:
+            return self._read_json()
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return {}
+        if length <= 0 or length > MAX_BODY_BYTES:
+            return {}
+        raw = self.rfile.read(length).decode("utf-8", "replace")
+        return dict(urllib.parse.parse_qsl(raw, keep_blank_values=True))
+
+    def _query(self) -> dict:
+        raw = self.path.split("?", 1)[1] if "?" in self.path else ""
+        return dict(urllib.parse.parse_qsl(raw, keep_blank_values=True))
+
+    def _connect_v1(self, method: str):
+        """/api/v1/* — connected apps only. A Bearer token is the sole way in;
+        the browser's session cookie is deliberately ignored here."""
+        auth = self.headers.get("Authorization") or ""
+        token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+        who = connect_token_user(token)
+        if not who:
+            return self._json({"error": "invalid_token",
+                               "error_description": "Connect to FAAM again."}, 401)
+        _set_req(who["username"], 0)
+        body = self._read_json() if method == "POST" else {}
+        res = connect_api(method, self.path.split("?")[0], who["username"], body)
+        return self._json(res, res.pop("status", 200))
+
     def _send_file(self, file_path: Path, content_type: str | None = None) -> None:
         if not file_path.exists():
             return self._json({"error": "not found"}, 404)
@@ -4783,6 +6211,39 @@ NOT FINANCIAL ADVICE.
                 "provider": user.get("provider", "local"),
             })
 
+        # ---- Stocks Browser, alerts & notifications
+        if path == "/api/browser/sources":
+            return self._json({"sources": [{"id": k, "label": v["label"]}
+                                           for k, v in SB_SOURCES.items()],
+                               "available": bool(OPENAI_API_KEY)})
+        if path in ("/api/alerts", "/api/notifications"):
+            if not user:
+                return self._json({"error": "Log in first."}, 401)
+            if path == "/api/alerts":
+                return self._json({"alerts": alerts_list(user["username"]),
+                                   "max": ALERTS_MAX})
+            return self._json(notifs_list(user["username"]))
+
+        # ---- FAAM Connect
+        if path == "/connect":
+            if not user:
+                return self._redirect("/login?next=" + urllib.parse.quote(self.path, safe=""))
+            return self._send_file(STATIC / "connect.html", "text/html; charset=utf-8")
+        if path == "/api/connect/info":
+            if not user:
+                return self._json({"error": "Sign in to FAAM first.", "auth": False}, 401)
+            res = connect_info(user["username"], self._query())
+            return self._json(res, res.pop("status", 200))
+        if path == "/api/connect/apps":
+            if not user:
+                return self._json({"error": "Log in first."}, 401)
+            out = {"apps": connect_my_apps(user["username"])}
+            if user.get("admin"):
+                out["dev"] = connect_dev_apps(user["username"]).get("apps", [])
+            return self._json(out)
+        if path.startswith("/api/v1/"):
+            return self._connect_v1("GET")
+
         if path == "/auth/google/start":
             cid, _ = google_creds()
             if not cid:
@@ -4861,9 +6322,21 @@ NOT FINANCIAL ADVICE.
         if path == "/api/stockpaper":
             if not user:
                 return self._json({"error": "Log in to read the Stock Paper."}, 401)
-            return self._json({"posts": stockpaper_list(),
-                               "canPost": is_admin_username(user["username"]),
-                               "kinds": list(SP_KINDS)})
+            admin = is_admin_username(user["username"])
+            return self._json({"posts": stockpaper_list(), "canPost": admin,
+                               "kinds": list(SP_KINDS),
+                               **({"site": paper_site_status()} if admin else {})})
+
+        if path == "/api/stockpaper/img":
+            # AI illustrations. The id is validated against [0-9a-f]{16}, so it
+            # can never point outside the image folder.
+            if not user:
+                return self._json({"error": "Log in first."}, 401)
+            q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+            f = _sp_image_path((q.get("id", [""])[0] or "").strip())
+            if not f or not f.exists():
+                return self._json({"error": "No such image."}, 404)
+            return self._send_file(f, "image/jpeg")
 
         if path == "/api/stockpaper/latest":
             # Feeds the loading-screen promo; headline only.
@@ -5262,6 +6735,60 @@ NOT FINANCIAL ADVICE.
             token = make_session(username)
             return self._json({"ok": True, "username": username, "tier": 0},
                               set_cookie=self._session_cookie(token))
+
+        # ---- Stocks Browser, alerts & notifications
+        if path == "/api/browser/search" or path.startswith(("/api/alerts/", "/api/notifications/")):
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in first."}, 401)
+            body = self._read_json()
+            name = u["username"]
+            if path == "/api/browser/search":
+                if usage_blocked():
+                    return self._json(USAGE_LIMIT_MSG, 402)
+                res = stocks_browser_search(name, body.get("query"), body.get("source") or "web",
+                                            str(body.get("url") or ""))
+            elif path == "/api/alerts/create":
+                res = alerts_create(name, body.get("symbol"), body.get("kind"), body.get("value"))
+            elif path == "/api/alerts/delete":
+                res = alerts_delete(name, str(body.get("id") or ""))
+            elif path == "/api/alerts/rearm":
+                res = alerts_rearm(name, str(body.get("id") or ""))
+            elif path == "/api/notifications/read":
+                res = notifs_read(name, body.get("ids"))
+            elif path == "/api/notifications/clear":
+                res = notifs_clear(name)
+            else:
+                return self._json({"error": "Not found."}, 404)
+            status = res.pop("status", 200 if res.get("ok") else 400)
+            return self._json(res, status)
+
+        # ---- FAAM Connect
+        if path == "/api/connect/token":
+            res = connect_token(self._read_form_or_json(), self.client_address[0])
+            return self._json(res, res.pop("status", 200))
+        if path.startswith("/api/v1/"):
+            return self._connect_v1("POST")
+        if path.startswith("/api/connect/"):
+            u = self._current_user()
+            if not u:
+                return self._json({"error": "Log in first."}, 401)
+            body = self._read_json()
+            name = u["username"]
+            if path == "/api/connect/approve":
+                res = connect_approve(name, {k: body.get(k) for k in (
+                    "client_id", "redirect_uri", "state", "code_challenge",
+                    "code_challenge_method", "response_type")}, bool(body.get("approve")))
+            elif path == "/api/connect/disconnect":
+                res = connect_disconnect(name, str(body.get("clientId") or ""))
+            elif path == "/api/connect/dev/create":
+                res = connect_dev_create(name, body.get("name"), body.get("redirectUri"))
+            elif path == "/api/connect/dev/delete":
+                res = connect_dev_delete(name, str(body.get("clientId") or ""))
+            else:
+                return self._json({"error": "Not found."}, 404)
+            status = res.pop("status", 200 if res.get("ok") else 400)
+            return self._json(res, status)
 
         if path == "/api/logout":
             return self._json({"ok": True}, set_cookie=self._session_cookie(clear=True))
@@ -5783,6 +7310,24 @@ NOT FINANCIAL ADVICE.
             res = learn_lesson_check(u["username"], cid, idx, chosen)
             return self._json(res, 200 if res.get("ok") else 400)
 
+        if path in ("/api/sim/start", "/api/sim/step"):
+            # Dev-only draft: anyone else gets the same 404 as a missing route.
+            u = self._current_user()
+            if not (u and is_admin_username(u["username"])):
+                return self._json({"error": "Not found."}, 404)
+            body = self._read_json()
+            if path == "/api/sim/start":
+                res = sim_start(u["username"], str(body.get("symbol") or ""),
+                                str(body.get("length") or "medium"),
+                                body.get("blind", True) is not False)
+            else:
+                adv = body.get("advance", 1)
+                res = sim_step(u["username"], str(body.get("id") or ""),
+                               str(body.get("action") or "hold"), body.get("shares"),
+                               "end" if adv == "end" else adv)
+            status = res.pop("status", 200 if res.get("ok") else 400)
+            return self._json(res, status)
+
         if path.startswith("/api/stockpaper/"):
             u = self._current_user()
             if not u:
@@ -5792,7 +7337,19 @@ NOT FINANCIAL ADVICE.
             if path == "/api/stockpaper/post":
                 res = stockpaper_publish(name, body.get("title"), body.get("body"),
                                          body.get("kind"), body.get("tickers"),
-                                         body.get("pinned"))
+                                         body.get("pinned"), body.get("developing"),
+                                         body.get("image"))
+            elif path == "/api/stockpaper/site/sync":
+                if not is_admin_username(name):
+                    return self._json({"error": "Not found."}, 404)
+                res = paper_site_sync_now()
+                res = {**res, "ok": True, "site": paper_site_status()}
+            elif path == "/api/stockpaper/ai/draft":
+                res = stockpaper_ai_draft(name, body.get("prompt"))
+            elif path == "/api/stockpaper/ai/polish":
+                res = stockpaper_ai_polish(name, body.get("title"), body.get("body"),
+                                           bool(body.get("grammar")), bool(body.get("developing")),
+                                           bool(body.get("picture")))
             elif path == "/api/stockpaper/delete":
                 res = stockpaper_delete(name, str(body.get("id") or ""))
             elif path == "/api/stockpaper/comment":
@@ -5924,6 +7481,10 @@ def main() -> None:
         (DATA_DIR / "port").write_text(str(port))
     except Exception:  # noqa: BLE001
         pass
+    if os.environ.get("FAAM_ALERTS", "1") != "0":
+        threading.Thread(target=alerts_loop, daemon=True, name="alerts").start()
+        print(f"   ✓ Price alerts checked every {ALERT_INTERVAL}s"
+              + (" · Mac notifications on" if DESKTOP_NOTIFS else ""))
     print(f"   → http://localhost:{port}\n")
     with httpd:
         try:

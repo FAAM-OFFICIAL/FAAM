@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FAAM · Connect</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://rsms.me" />
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+  <style>
+    :root{
+      --bg:#F7F8FA; --panel:#fff; --border:#E4E7EC; --border-strong:#D0D5DD;
+      --text:#0B1220; --text-2:#344054; --muted:#667085; --accent:#2E64F0; --accent-2:#6E56CF;
+      --green:#067647; --green-soft:#ECFDF3; --red:#B42318; --red-soft:#FEF3F2;
+      --shadow:0 16px 40px -12px rgba(16,24,40,.18);
+    }
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:
+      radial-gradient(900px 500px at 80% -10%,rgba(110,86,207,.10),transparent 60%),
+      radial-gradient(800px 480px at -10% 20%,rgba(46,100,240,.10),transparent 55%),var(--bg);
+      font-family:'Inter',-apple-system,system-ui,sans-serif;color:var(--text);-webkit-font-smoothing:antialiased}
+    .card{width:min(420px,100%);background:var(--panel);border:1px solid var(--border);border-radius:20px;
+      box-shadow:var(--shadow);padding:32px 28px 26px;text-align:center}
+    .pair{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:22px}
+    .tile{width:58px;height:58px;border-radius:15px;display:grid;place-items:center;box-shadow:0 6px 16px -6px rgba(16,24,40,.35)}
+    .tile.faam{background:#0e131c}
+    .tile.app{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff}
+    .link{display:flex;gap:5px}
+    .link i{width:6px;height:6px;border-radius:50%;background:var(--border-strong);animation:hop 1.4s infinite ease-in-out}
+    .link i:nth-child(2){animation-delay:.15s}.link i:nth-child(3){animation-delay:.3s}
+    @keyframes hop{0%,60%,100%{transform:none;background:var(--border-strong)}30%{transform:translateY(-4px);background:var(--accent)}}
+    h1{font-size:22px;font-weight:800;letter-spacing:-.015em;margin:0 0 6px;line-height:1.25}
+    .who{color:var(--muted);font-size:13.5px;margin:0 0 22px}
+    .who b{color:var(--text-2);font-weight:600}
+    .access{list-style:none;margin:0 0 24px;padding:14px 16px;border:1px solid var(--border);border-radius:14px;background:#FBFCFD;text-align:left}
+    .access-h{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin:0 0 10px}
+    .access li{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--text-2);padding:6px 0}
+    .access svg{flex:none;color:var(--green)}
+    .btns{display:grid;gap:10px}
+    .go{height:46px;border:0;border-radius:11px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;font-weight:700;font-size:15px;font-family:inherit;cursor:pointer}
+    .go:hover{filter:brightness(1.06)}
+    .go:disabled{opacity:.6;cursor:default}
+    .cancel{height:44px;border:1px solid var(--border-strong);border-radius:11px;background:#fff;color:var(--text-2);font-weight:600;font-size:14px;font-family:inherit;cursor:pointer}
+    .cancel:hover{background:#F1F3F7}
+    .foot{color:var(--muted);font-size:12px;margin:18px 0 0;line-height:1.5}
+    .state{display:none}
+    .done .tile.app{background:var(--green)}
+    .badge{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;padding:6px 12px;border-radius:999px;margin-bottom:12px}
+    .badge.ok{color:var(--green);background:var(--green-soft)}
+    .badge.bad{color:var(--red);background:var(--red-soft)}
+    .err{color:var(--red);font-size:13px;margin:12px 0 0}
+    .err:empty{display:none}
+    .skeleton{height:14px;border-radius:7px;background:linear-gradient(90deg,#EEF0F4,#F7F8FA,#EEF0F4);background-size:200% 100%;animation:sh 1.2s infinite;margin:10px auto}
+    @keyframes sh{to{background-position:-200% 0}}
+    a{color:var(--accent);font-weight:600;text-decoration:none}
+  </style>
+</head>
+<body>
+  <main class="card" id="card">
+    <div class="pair" aria-hidden="true">
+      <span class="tile faam">
+        <svg viewBox="0 0 32 32" width="34" height="34"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#4f8cff"/><stop offset="100%" stop-color="#7c5cff"/></linearGradient></defs><path fill="url(#g)" d="M6 25V7h2v12l5-6 4 5 9-13v20H6z"/></svg>
+      </span>
+      <span class="link"><i></i><i></i><i></i></span>
+      <span class="tile app" id="appTile">
+        <svg viewBox="0 0 24 24" width="26" height="26"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10.5 18.5h3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </span>
+    </div>
+
+    <!-- Loading -->
+    <section class="state" id="sLoading" style="display:block">
+      <div class="skeleton" style="width:70%"></div>
+      <div class="skeleton" style="width:45%"></div>
+    </section>
+
+    <!-- Ask -->
+    <section class="state" id="sAsk">
+      <h1>Connect to <span id="appName">FAAM iOS App</span>?</h1>
+      <p class="who">Signed in as <b id="userName"></b></p>
+      <ul class="access" id="access">
+        <li class="access-h">What moves over</li>
+      </ul>
+      <div class="btns">
+        <button type="button" class="go" id="connect">Connect</button>
+        <button type="button" class="cancel" id="cancel">Cancel</button>
+      </div>
+      <p class="err" id="err" role="alert"></p>
+      <p class="foot">You can disconnect anytime in FAAM under Account → Connected apps.</p>
+    </section>
+
+    <!-- Done -->
+    <section class="state" id="sDone">
+      <span class="badge ok">
+        <svg viewBox="0 0 24 24" width="15" height="15"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Connected
+      </span>
+      <h1 id="doneTitle">Returning to the app…</h1>
+      <p class="foot" id="doneText">If nothing happens, open the app — your data is ready there.</p>
+    </section>
+
+    <!-- Problem -->
+    <section class="state" id="sBad">
+      <span class="badge bad">Can't connect</span>
+      <h1>This connection link isn't valid</h1>
+      <p class="foot" id="badText"></p>
+      <p class="foot"><a href="/dashboard">Go to FAAM →</a></p>
+    </section>
+  </main>
+
+  <script>
+  (function () {
+    const $ = (id) => document.getElementById(id);
+    const params = new URLSearchParams(location.search);
+    const keys = ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "response_type"];
+    const request = {};
+    keys.forEach((k) => { if (params.has(k)) request[k] = params.get(k); });
+
+    function show(id) {
+      ["sLoading", "sAsk", "sDone", "sBad"].forEach((s) => { $(s).style.display = s === id ? "block" : "none"; });
+    }
+    function bad(msg) { $("badText").textContent = msg || "Open the app and try connecting again."; show("sBad"); }
+
+    const tick = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    async function load() {
+      try {
+        const r = await fetch("/api/connect/info?" + new URLSearchParams(request));
+        if (r.status === 401) { location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search); return; }
+        const d = await r.json();
+        if (!r.ok || d.error) return bad(d.error);
+        $("appName").textContent = d.app.name;
+        $("userName").textContent = d.username;
+        document.title = "Connect to " + d.app.name + " · FAAM";
+        (d.access || []).forEach((line) => {
+          const li = document.createElement("li");
+          li.innerHTML = tick;                       // static icon only
+          li.appendChild(document.createTextNode(line));
+          $("access").appendChild(li);
+        });
+        show("sAsk");
+        $("connect").focus();
+      } catch (e) { bad("FAAM couldn't be reached. Check your connection and try again."); }
+    }
+
+    async function answer(approve) {
+      $("connect").disabled = $("cancel").disabled = true;
+      $("err").textContent = "";
+      try {
+        const r = await fetch("/api/connect/approve", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...request, approve }),
+        });
+        const d = await r.json();
+        if (!r.ok || d.error) throw new Error(d.error || "Something went wrong.");
+        if (approve) {
+          $("doneTitle").textContent = "Returning to " + (d.app || "the app") + "…";
+          document.getElementById("card").classList.add("done");
+          show("sDone");
+        }
+        // The server built this from the app's registered return address only.
+        setTimeout(() => { location.href = d.redirect; }, approve ? 650 : 0);
+      } catch (e) {
+        $("err").textContent = e.message;
+        $("connect").disabled = $("cancel").disabled = false;
+      }
+    }
+
+    $("connect").addEventListener("click", () => answer(true));
+    $("cancel").addEventListener("click", () => answer(false));
+    load();
+  })();
+  </script>
+</body>
+</html>
