@@ -117,6 +117,11 @@
           <path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M20 20l-3.5-3.5"/>
         </svg>
       </button>
+      <button type="button" class="agent-cta" id="agentBtn" title="FAAM Agent: run FAAM by talking or typing">
+        <span class="agent-orb" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg></span>
+        <span class="agent-label">FAAM Agent</span>
+        <kbd class="agent-kbd" id="agentKbd" aria-hidden="true">⌘K</kbd>
+      </button>
       <button class="learn-cta" id="learnBtn" title="FAAM Learn">
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
           <path fill="currentColor" d="M12 3 1 9l11 6 9-4.9V17h2V9L12 3zM5 13.2V17l7 3.8 7-3.8v-3.8l-7 3.8-7-3.8z"/>
@@ -362,7 +367,7 @@
     <form class="chatbar" id="chatForm" autocomplete="off">
       <span class="chat-pre">Ask FAAM</span>
       <input id="chatInput" type="text" placeholder="What's the outlook on this stock?" />
-      <button type="button" id="voiceBtn" class="voice-btn" aria-label="FAAM agent voice" title="FAAM agent voice — run FAAM by talking">
+      <button type="button" id="voiceBtn" class="voice-btn agent-mic" aria-label="Talk to the FAAM Agent" title="Talk to the FAAM Agent">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
       </button>
       <button type="submit" id="sendBtn" aria-label="Send">
@@ -1281,6 +1286,26 @@
   </dialog>
 
   <!-- Notifications & price alerts -->
+  <dialog id="junoScoreDialog" class="form-dialog jsc-dialog" aria-labelledby="jscTitle">
+    <header>
+      <h3 id="jscTitle">JUNO scorecard <span class="mc-lock soon">In heavy testing</span></h3>
+      <button class="iconbtn" id="closeJunoScore" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="form-body jsc-body">
+      <p class="jsc-lead">Every trading day after the close, JUNO writes down its odds that each of 40 well-known stocks beats the S&amp;P 500. When a call comes due, FAAM checks it. Every call stays on the record, right or wrong.</p>
+      <p class="muted small" id="jscSince"></p>
+      <h4 class="jsc-h">Live record</h4>
+      <div class="jsc-tiles" id="jscLive"></div>
+      <h4 class="jsc-h">Backtest <span class="muted small">each year predicted only from the years before it</span></h4>
+      <div class="jsc-tiles" id="jscBack"></div>
+      <h4 class="jsc-h">Latest calls</h4>
+      <div class="jsc-table-wrap"><table class="jsc-table" id="jscCalls"></table></div>
+      <p class="juno-note">JUNO's odds come from JUNO Signal, its numbers model. Odds, not a promise. Information, not financial advice.</p>
+    </div>
+  </dialog>
+
   <dialog id="notifDialog" class="form-dialog notif-dialog">
     <header>
       <h3>Notifications</h3>
@@ -1655,6 +1680,7 @@
         <div class="setting-label">Forecast model</div>
         <p class="muted small" style="margin:0 0 10px">Apollo is fast and free. Artemis runs a Monte Carlo simulation and reads live news (uses AI).</p>
         <div class="model-choices" id="modelChoices"></div>
+        <button type="button" class="nt-link juno-score-link" id="junoScoreLink">See JUNO's live scorecard</button>
       </div>
       <div class="setting-group">
         <div class="setting-label">Add-ons</div>

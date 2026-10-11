@@ -181,7 +181,7 @@ class TestSearch(Case):
         self.m._sb_responses = fake
         self.m.titan_recall = lambda q: None          # keep Titan offline in tests
         self.m.titan_generate = lambda q: ""
-        self.m.juno_status = lambda: {"installed": False, "running": False}
+        self.m.juno_status = lambda: {"installed": False, "running": False, "forecastReady": False}
 
     def test_a_search(self):
         r = self.m.stocks_browser_search("alice", "why is nvda up", "web")
@@ -265,8 +265,10 @@ class TestModelRouting(Case):
         self.m._sb_responses = lambda *a: (self.calls.append(a), sample())[1]
         self.m.titan_recall = lambda q: None
         self.m.titan_generate = lambda q: ""
-        self.juno = False
-        self.m.juno_status = lambda: {"installed": self.juno, "running": self.juno}
+        self.juno = False            # Llama X JUNO installed (explains)
+        self.forecasts = None        # JUNO Signal passed testing; follows self.juno unless set
+        self.m.juno_status = lambda: {"installed": self.juno, "running": self.juno,
+                                      "forecastReady": self.juno if self.forecasts is None else self.forecasts}
 
     def pick(self, q, choice="auto"):
         return self.m.sb_pick_model(q, choice)[0]
@@ -298,6 +300,16 @@ class TestModelRouting(Case):
         self.assertEqual(model, "web")
         self.assertIn("in heavy testing", why)
 
+    def test_forecasts_and_explaining_switch_on_separately(self):
+        self.juno, self.forecasts = True, False      # Llama installed, JUNO Signal hasn't passed
+        self.assertEqual(self.pick("What is a P/E ratio?"), "juno")
+        model, why = self.m.sb_pick_model("Where is Nvidia headed next month?", "auto")
+        self.assertEqual(model, "web")
+        self.assertIn("in heavy testing", why)
+        self.juno, self.forecasts = False, True      # JUNO Signal passed, no Llama on this computer
+        self.assertEqual(self.pick("Where is Nvidia headed next month?"), "juno")
+        self.assertEqual(self.pick("What is a P/E ratio?"), "titan")
+
     def test_your_pick_wins(self):
         self.juno = True
         self.assertEqual(self.pick("Why is Nvidia down today?", "juno"), "juno")
@@ -312,21 +324,35 @@ class TestModelRouting(Case):
 
     def test_juno_forecast_answer(self):
         self.juno = True
-        bands = [{"band": b, "name": n, "p": p, "lo": lo, "hi": hi} for b, n, p, lo, hi in [
-            ("A", "Strong down", .05, None, -8.0), ("B", "Down", .15, -8.0, -2.0), ("C", "Flat", .2, -2.0, 2.0),
-            ("D", "Up", .4, 2.0, 8.0), ("E", "Strong up", .2, 8.0, None)]]
+        read = {"name": "Llama X JUNO", "signal": "JUNO Signal", "days": 21, "vs": "S&P 500", "probBeat": 0.6,
+                "expExcessPct": 1.2, "history": {"beatRate": 0.56, "n": 900, "years": "2020–2026"},
+                "reasons": [{"signal": "ex63", "text": "It beat the S&P 500 by 9 points over 3 months", "push": "up"}],
+                "passed": True, "eval": {}}
         seen = []
         self.m.juno_forecast = lambda sym, h: (seen.append((sym, h)), {
-            "symbol": sym, "name": "NVIDIA Corporation", "price": 100.0,
-            "juno": {"days": 21, "bands": bands, "probUp": .6, "probDown": .2, "expReturnPct": 2.4}})[1]
+            "symbol": sym, "name": "NVIDIA Corporation", "price": 100.0, "juno": read})[1]
         r = self.m.stocks_browser_search("alice", "where is nvidia headed next month", model="auto")
         self.assertEqual(seen, [("NVDA", 30)])
-        self.assertEqual(r["model"], {"id": "juno", "name": "Llama X JUNO", "builtWith": "Built with Llama"})
-        self.assertIn("60% chance it ends higher", r["paragraphs"][0])
-        self.assertIn("“Up” (+2.0% to +8.0%) at 40%", r["paragraphs"][1])
-        self.assertEqual(len(r["junoBands"]), 5)
+        self.assertEqual(r["model"], {"id": "juno", "name": "Llama X JUNO"},
+                         "no Built with Llama: Llama didn't write any of this")
+        self.assertIn("60% chance it beats the S&P 500 over the next 21 trading days", r["paragraphs"][0])
+        self.assertIn("beat the market 56% of the time", r["paragraphs"][0])
+        self.assertIn("it beat the S&P 500 by 9 points over 3 months (raises them)", r["paragraphs"][1])
+        self.assertIn("heavy testing", r["paragraphs"][2])
+        self.assertEqual(r["junoRead"]["days"], 21)
+        self.assertNotIn("llama", r)
         self.assertEqual(r["quote"]["symbol"], "NVDA")
         self.assertEqual(self.calls, [], "no web search, no cost")
+
+    def test_llama_explanation_carries_the_attribution(self):
+        self.juno = True
+        read = {"days": 21, "probBeat": 0.4, "history": {"beatRate": 0.47, "n": 900}, "reasons": [],
+                "explanation": "It has lagged the market lately.", "explainedBy": "Llama X JUNO",
+                "builtWith": "Built with Llama"}
+        self.m.juno_forecast = lambda sym, h: {"symbol": sym, "name": "Apple", "price": 1.0, "juno": read}
+        r = self.m.stocks_browser_search("alice", "where is apple headed next month", model="juno")
+        self.assertEqual(r["model"]["builtWith"], "Built with Llama")
+        self.assertEqual(r["paragraphs"][1], "It has lagged the market lately.")
 
     def test_juno_explains_concepts(self):
         self.juno = True
@@ -334,7 +360,7 @@ class TestModelRouting(Case):
         self.m._juno_call = lambda method, path, body=None, timeout=60.0: {
             "text": "An ETF is a basket of investments.\n\nIt trades like a single stock."}
         r = self.m.stocks_browser_search("alice", "What is an ETF?", model="auto")
-        self.assertEqual(r["model"]["id"], "juno")
+        self.assertEqual(r["model"], {"id": "juno", "name": "Llama X JUNO", "builtWith": "Built with Llama"})
         self.assertEqual(r["paragraphs"], ["An ETF is a basket of investments.", "It trades like a single stock."])
         self.assertIsNone(r["quote"])
 

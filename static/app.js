@@ -461,6 +461,13 @@ function assetBadge(type) {
   return "";
 }
 
+// Crypto names arrive as "Bitcoin USD"; the card's CRYPTO tag already says what it is.
+function cardName(s) {
+  const n = s.name || "";
+  if (!/CRYPTO/i.test(s.quoteType || "")) return n;
+  return n.replace(/\s+USD$/i, "") || s.symbol.replace(/-USD$/i, "");
+}
+
 function extTag(s) {
   if (s.extPct == null) return "";
   const up = s.extPct >= 0;
@@ -665,9 +672,9 @@ function renderWatchlist() {
       return `
         <div class="tcard ${cls} ${active}" data-symbol="${s.symbol}">
           <button class="tremove" data-remove="${s.symbol}" title="Remove">×</button>
-          <div class="tsym">${s.symbol}${assetBadge(s.quoteType)}</div>
+          <div class="tsym">${s.symbol}</div>
           <div class="tpct">${fmt.pct(s.pct)}</div>
-          <div class="tname">${s.name || ""}</div>
+          <div class="tname">${assetBadge(s.quoteType)}${escapeHtml(cardName(s))}</div>
           <div class="tprice">$${fmt.price(s.price)}${extTag(s)}</div>
           ${sparkline(s.spark)}
         </div>`;
@@ -1018,7 +1025,7 @@ async function loadForecast() {
   renderMarketsPanel(null);
   const loadingNote = state.forecastModel === "artemis" ? "Running Artemis on"
     : state.forecastModel === "perseverance" ? "Running Perseverance on"
-    : state.forecastModel === "juno" ? "Llama X JUNO is reading (the first one takes ~20s to wake up)"
+    : state.forecastModel === "juno" ? "Llama X JUNO is reading"
     : "Running Apollo on";
   renderJunoPanel(null);
   $("#fcStats").innerHTML = `<div class="fc-loading"><span class="pulse-dots"><span></span><span></span><span></span></span> ${loadingNote} ${escapeHtml(state.active)}…</div>`;
@@ -1173,7 +1180,7 @@ const FORECAST_MODELS = [
   { id: "apollo", name: "Apollo", kind: "Drift & volatility engine — fast, no AI cost", minTier: 0 },
   { id: "artemis", name: "Artemis", kind: "Monte Carlo simulation + live news sentiment", minTier: 0 },
   { id: "perseverance", name: "Perseverance", kind: "Apollo + Artemis ensemble — Elite", minTier: 4 },
-  { id: "juno", name: "Llama X JUNO", kind: "Built with Llama · trained on 10 years of stock data", minTier: 0, comingSoon: true, testing: true },
+  { id: "juno", name: "Llama X JUNO", kind: "Odds it beats the S&P 500, from 10 years of S&P 500 stocks", minTier: 0, comingSoon: true, testing: true },
 ];
 
 function modelAvailable(m) {
@@ -1208,12 +1215,68 @@ async function loadJunoStatus() {
   try {
     const d = await (await fetch("/api/juno")).json();
     const m = FORECAST_MODELS.find((x) => x.id === "juno");
-    if (m && d.installed) {
+    if (m && d.forecastReady) {
       m.comingSoon = false;
-      m.kind = "Built with Llama · runs on this Mac · in heavy testing";
+      m.kind = "Odds it beats the S&P 500 · in heavy testing";
     }
     if ($("#settingsDialog").open) renderModelChoices();
   } catch (e) { /* stays "in heavy testing" */ }
+}
+
+// JUNO's read on a stock: the odds it beats the S&P 500, what odds like that
+// have meant in testing, and the signals that moved them.
+function buildJunoRead(box, j, opts = {}) {
+  box.replaceChildren();
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  const pct = Math.round(j.probBeat * 100);
+  if (!opts.compact) {
+    const head = el("div", "juno-head");
+    head.append(el("strong", "", `${j.name} · next ${j.days} trading days`), el("span", "mc-lock soon", "In heavy testing"));
+    box.appendChild(head);
+  }
+  const odds = el("div", "juno-big");
+  odds.append(el("b", pct >= 50 ? "up" : "down", `${pct}%`), el("span", "", ` odds it beats the ${j.vs || "S&P 500"}`));
+  box.appendChild(odds);
+  const meter = el("div", "juno-meter");
+  const fill = el("i", pct >= 50 ? "up" : "down");
+  fill.style.width = `${pct}%`;
+  meter.append(fill, el("span", "juno-mid"));
+  meter.setAttribute("role", "img");
+  meter.setAttribute("aria-label", `${pct}% odds of beating the market; 50% is a coin flip`);
+  box.appendChild(meter);
+  const h = j.history || {};
+  let sub = `In testing${h.years ? ` (${h.years})` : ""}, stocks with odds like these beat the market ${Math.round((h.beatRate ?? 0.5) * 100)}% of the time.`;
+  if (!j.passed) sub += " JUNO hasn't passed its accuracy bar at this horizon yet, so read this as an experiment.";
+  box.appendChild(el("p", "juno-sub", sub));
+  if ((j.reasons || []).length) {
+    box.appendChild(el("div", "juno-why-h", "What moved the odds"));
+    const ul = el("ul", "juno-why");
+    j.reasons.forEach((r) => {
+      const li = el("li", r.push === "up" ? "up" : "down");
+      li.append(el("span", "juno-arrow", r.push === "up" ? "↑" : "↓"), el("span", "", r.text),
+        el("em", "", r.push === "up" ? "raises the odds" : "lowers the odds"));
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+  } else {
+    box.appendChild(el("p", "juno-sub", "No single signal moved these odds much on its own."));
+  }
+  if (j.explanation) box.appendChild(el("p", "juno-explain", j.explanation));
+  if (!opts.compact) {
+    box.appendChild(el("p", "juno-note",
+      `Odds from ${j.signal || "JUNO Signal"}, JUNO's numbers model, trained on 10 years of S&P 500 stocks.`
+      + (j.explainedBy ? ` Explained by ${j.explainedBy} (${j.builtWith}).` : "")
+      + " Odds, not a promise. Information, not financial advice."));
+  }
+  const link = el("button", "nt-link juno-score-link", "See JUNO's live scorecard");
+  link.type = "button";
+  link.addEventListener("click", () => openJunoScorecard());
+  box.appendChild(link);
 }
 
 function renderJunoPanel(j) {
@@ -1221,38 +1284,109 @@ function renderJunoPanel(j) {
   if (!box) return;
   if (!j) { box.hidden = true; box.replaceChildren(); return; }
   box.hidden = false;
-  box.replaceChildren();
-  const head = document.createElement("div");
-  head.className = "juno-head";
-  const title = document.createElement("strong");
-  title.textContent = `${j.name} · next ${j.days} trading days`;
-  const odds = document.createElement("span");
-  odds.className = "juno-odds";
-  odds.textContent = `${Math.round(j.probUp * 100)}% up · ${Math.round(j.probDown * 100)}% down`;
-  head.append(title, odds);
-  box.appendChild(head);
-  (j.bands || []).slice().reverse().forEach((b) => {
-    const row = document.createElement("div");
-    row.className = `juno-row b${b.band}`;
-    const label = document.createElement("span");
-    label.className = "juno-label";
-    const range = b.lo == null ? `below ${fmt.pct(b.hi)}` : b.hi == null ? `above ${fmt.pct(b.lo)}` : `${fmt.pct(b.lo)} to ${fmt.pct(b.hi)}`;
-    label.textContent = `${b.name} (${range})`;
-    const bar = document.createElement("span");
-    bar.className = "juno-bar";
-    const fill = document.createElement("i");
-    fill.style.width = `${Math.round(b.p * 100)}%`;
-    bar.appendChild(fill);
-    const pct = document.createElement("span");
-    pct.className = "juno-pct";
-    pct.textContent = `${Math.round(b.p * 100)}%`;
-    row.append(label, bar, pct);
-    box.appendChild(row);
+  buildJunoRead(box, j);
+}
+
+/* ---------- JUNO scorecard: every call JUNO makes, and how it turned out ---------- */
+const JSC_SPAN = { 5: "1 week", 21: "1 month", 63: "3 months" };
+
+function jscDate(d) {
+  if (!d) return "";
+  const [y, m, day] = d.split("-").map(Number);
+  return new Date(y, m - 1, day).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+async function openJunoScorecard() {
+  openDialog("junoScoreDialog");
+  const live = $("#jscLive"), back = $("#jscBack"), calls = $("#jscCalls");
+  live.innerHTML = '<div class="muted small">Loading…</div>';
+  back.replaceChildren();
+  calls.replaceChildren();
+  let d;
+  try {
+    d = await (await fetch("/api/juno/scorecard")).json();
+  } catch (e) {
+    live.innerHTML = '<div class="muted small">Couldn\'t load the scorecard. Try again in a moment.</div>';
+    return;
+  }
+  $("#jscSince").textContent = d.since
+    ? `Live since ${jscDate(d.since)} · ${d.symbols.length} stocks, every trading day`
+    : `Starts with the next market close · ${d.symbols.length} stocks, every trading day`;
+  const tile = (title, lines, badge) => {
+    const t = document.createElement("div");
+    t.className = "jsc-tile";
+    const h = document.createElement("div");
+    h.className = "jsc-tile-h";
+    h.textContent = title;
+    if (badge) {
+      const b = document.createElement("span");
+      b.className = `jsc-badge ${badge.cls}`;
+      b.textContent = badge.text;
+      h.appendChild(b);
+    }
+    t.appendChild(h);
+    lines.forEach(([cls, text]) => {
+      const p = document.createElement("div");
+      p.className = cls;
+      p.textContent = text;
+      t.appendChild(p);
+    });
+    return t;
+  };
+  live.replaceChildren(...[5, 21, 63].map((h) => {
+    const r = (d.live || {})[h] || { made: 0, scored: 0 };
+    if (!r.scored) {
+      return tile(JSC_SPAN[h], [["jsc-big", "—"],
+        ["jsc-line", r.made ? `${r.made} calls waiting · first results ${jscDate(r.nextDue)}` : "No calls yet"]]);
+    }
+    const lines = [["jsc-big", `${Math.round(r.hitRate * 100)}%`], ["jsc-line", `right on ${r.scored} scored calls`]];
+    if (r.favoredMinusRestPct != null) {
+      lines.push(["jsc-line", `Its picks vs the rest: ${r.favoredMinusRestPct >= 0 ? "+" : ""}${r.favoredMinusRestPct.toFixed(2)} pts`]);
+    }
+    return tile(JSC_SPAN[h], lines, r.enough ? null : { cls: "wait", text: `Too early (${r.scored}/${d.enoughAt})` });
+  }));
+  const bt = d.backtest || {};
+  back.replaceChildren(...[5, 21, 63].filter((h) => bt[h]).map((h) => {
+    const e = bt[h];
+    return tile(JSC_SPAN[h], [
+      ["jsc-line", `Ranking skill ${e.ic >= 0 ? "+" : ""}${e.ic.toFixed(3)} (0 = none, t ${e.icT})`],
+      ["jsc-line", `Right ${Math.round(e.hitRate * 100)}% of ${Number(e.tested).toLocaleString()} test calls`],
+      ["jsc-line", e.logLoss < e.baseLogLoss ? "Its odds beat a coin flip" : "Its odds don't beat a coin flip yet"],
+      ["jsc-line muted", `Tested ${e.years}`],
+    ], e.passed ? { cls: "pass", text: "Passed" } : { cls: "wait", text: "Not yet" });
+  }));
+  if (!back.children.length) back.innerHTML = '<div class="muted small">JUNO Signal isn\'t trained on this computer yet.</div>';
+  const head = document.createElement("tr");
+  ["Stock", "Called", "Window", "Odds it beats S&P", "Result"].forEach((t) => {
+    const th = document.createElement("th");
+    th.textContent = t;
+    head.appendChild(th);
   });
-  const note = document.createElement("p");
-  note.className = "juno-note";
-  note.textContent = `${j.testing ? "In heavy testing. " : ""}${j.builtWith}. ${j.name} is Meta's ${j.base} fine-tuned by FAAM on years of daily stock data, sized to this stock's usual swings. Odds, not a promise. Information, not financial advice.`;
-  box.appendChild(note);
+  calls.appendChild(head);
+  (d.recent || []).forEach((c) => {
+    const tr = document.createElement("tr");
+    const res = c.result;
+    const right = res && ((c.p >= 0.5) === res.beat);
+    const cells = [c.sym, jscDate(c.start), JSC_SPAN[c.days] || `${c.days}d`, `${Math.round(c.p * 100)}%`,
+      res ? `${res.beat ? "Beat" : "Trailed"} by ${Math.abs(res.excessPct).toFixed(1)} pts ${right ? "✓" : "✗"}` : `Due ${jscDate(c.due)}`];
+    cells.forEach((t, i) => {
+      const td = document.createElement("td");
+      td.textContent = t;
+      if (i === 4 && res) td.className = right ? "ok" : "bad";
+      if (i === 4 && !res) td.className = "muted";
+      tr.appendChild(td);
+    });
+    calls.appendChild(tr);
+  });
+  if (!(d.recent || []).length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.className = "muted";
+    td.textContent = "JUNO makes its first calls after the next market close.";
+    tr.appendChild(td);
+    calls.appendChild(tr);
+  }
 }
 
 function selectForecastModel(id) {
@@ -2755,28 +2889,9 @@ function sbTitleFromUrl(url, domain) {
 
 function sbRenderJuno(d) {
   const box = $("#sbJuno");
-  box.replaceChildren();
-  box.hidden = !(d.junoBands && d.junoBands.length);
-  if (box.hidden) return;
-  const rows = d.junoBands.slice().reverse();
-  rows.forEach((b) => {
-    const row = document.createElement("div");
-    row.className = `juno-row b${b.band}`;
-    const label = document.createElement("span");
-    label.className = "juno-label";
-    const range = b.lo == null ? `below ${fmt.pct(b.hi)}` : b.hi == null ? `above ${fmt.pct(b.lo)}` : `${fmt.pct(b.lo)} to ${fmt.pct(b.hi)}`;
-    label.textContent = `${b.name} (${range})`;
-    const bar = document.createElement("span");
-    bar.className = "juno-bar";
-    const fill = document.createElement("i");
-    fill.style.width = `${Math.round(b.p * 100)}%`;
-    bar.appendChild(fill);
-    const pct = document.createElement("span");
-    pct.className = "juno-pct";
-    pct.textContent = `${Math.round(b.p * 100)}%`;
-    row.append(label, bar, pct);
-    box.appendChild(row);
-  });
+  box.hidden = !d.junoRead;
+  if (box.hidden) { box.replaceChildren(); return; }
+  buildJunoRead(box, d.junoRead, { compact: true });
 }
 
 function sbRenderResult(d, entry) {
@@ -2785,7 +2900,7 @@ function sbRenderResult(d, entry) {
   $("#sbKicker").textContent = entry.page
     ? `Page summary · ${d.sources[0]?.domain || "the web"}`
     : m.id === "web" ? `AI brief · ${d.sourceLabel || "All the web"} · ${nSrc} source${nSrc === 1 ? "" : "s"}`
-    : m.id === "juno" ? (d.junoBands ? `Forecast · next ${d.junoDays} trading days` : "Explainer")
+    : m.id === "juno" ? (d.junoRead ? `Forecast · next ${d.junoRead.days} trading days` : "Explainer")
     : "Quick answer";
   $("#sbTitle").textContent = entry.query;
   const who = $("#sbAnswered");
@@ -2796,7 +2911,7 @@ function sbRenderResult(d, entry) {
   if (d.modelReason) who.append(` — ${d.modelReason}`);
   sbRenderJuno(d);
   $("#sbNote").textContent = m.id === "juno"
-    ? (d.junoBands ? "Odds from Llama X JUNO (in heavy testing), Meta's Llama 3.1 fine-tuned by FAAM on years of stock data. Not a promise. Information, not financial advice."
+    ? (d.junoRead ? "Odds from JUNO Signal, JUNO's numbers model (in heavy testing), trained on 10 years of S&P 500 stocks. Not a promise. Information, not financial advice."
       : "Written by Llama X JUNO (Built with Llama, in heavy testing), running on this Mac. Information, not financial advice.")
     : m.id === "titan" ? "Answered by Titan, FAAM's built-in AI. Information, not financial advice."
     : "Written by FAAM AI from the sources below. Information, not financial advice.";
@@ -3100,10 +3215,82 @@ function vaOpen(listen) {
   if (!gate("voice")) return;
   const dock = $("#vaDock");
   dock.hidden = false;
+  vaSetMin(false);
   vaFollow();
   vaRenderExamples();
   if (listen && voiceSupported()) startListening();
   else setVoiceState("idle");
+}
+
+function vaSetMin(min) {
+  $("#vaDock").classList.toggle("min", min);
+  $("#vaMin").setAttribute("aria-label", min ? "Expand the voice agent" : "Minimize the voice agent");
+  $("#vaMin").title = min ? "Expand" : "Minimize";
+}
+
+// The top-bar button and ⌘K / Ctrl+K: open the agent, or bring it back if it's
+// tucked away. With `typing`, focus the command box instead of the mic.
+function vaLaunch(typing) {
+  const dock = $("#vaDock");
+  if (dock.hidden) {
+    vaOpen(!typing);
+  } else if (dock.classList.contains("min")) {
+    vaSetMin(false);
+    if (!typing) toggleListen();
+  } else if (!typing) {
+    toggleListen();
+  }
+  if (typing) setTimeout(() => $("#vaInput")?.focus(), 30);
+}
+
+function agentIntro(tries = 0) {
+  try { if (localStorage.getItem("faam-agent-intro")) return; } catch (e) { return; }
+  const btn = $("#agentBtn");
+  if ($("#bootScreen") || vaOpenDialogs().length || !btn || !btn.offsetParent) {
+    if (tries < 20) setTimeout(() => agentIntro(tries + 1), 1500);
+    return;
+  }
+  const tip = document.createElement("div");
+  tip.className = "agent-tip";
+  tip.setAttribute("role", "dialog");
+  tip.setAttribute("aria-label", "New: FAAM Agent");
+  const head = document.createElement("b");
+  head.textContent = "New · FAAM Agent";
+  const body = document.createElement("p");
+  body.textContent = `Run FAAM by talking or typing. Try “open Nvidia and set an alert at $150”. Shortcut: ${agentShortcut()}.`;
+  const acts = document.createElement("div");
+  acts.className = "agent-tip-acts";
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "agent-tip-go";
+  go.textContent = "Try it";
+  const later = document.createElement("button");
+  later.type = "button";
+  later.className = "agent-tip-later";
+  later.textContent = "Later";
+  acts.append(go, later);
+  tip.append(head, body, acts);
+  document.body.appendChild(tip);
+  const place = () => {
+    const r = btn.getBoundingClientRect();
+    const left = Math.max(12, Math.min(window.innerWidth - tip.offsetWidth - 12, r.left + r.width / 2 - tip.offsetWidth / 2));
+    tip.style.top = `${r.bottom + 12}px`;
+    tip.style.left = `${left}px`;
+    tip.style.setProperty("--arrow-x", `${r.left + r.width / 2 - left}px`);
+  };
+  place();
+  window.addEventListener("resize", place);
+  const done = () => {
+    try { localStorage.setItem("faam-agent-intro", "1"); } catch (e) {}
+    window.removeEventListener("resize", place);
+    tip.remove();
+  };
+  go.addEventListener("click", () => { done(); vaLaunch(false); });
+  later.addEventListener("click", done);
+}
+
+function agentShortcut() {
+  return /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘K" : "Ctrl+K";
 }
 
 function vaClose() {
@@ -3334,6 +3521,7 @@ const VA_HANDLERS = {
     vaClick(document.querySelector(`#fcHorizonTabs button[data-h="${VA_HORIZON[a.horizon]}"]`));
   },
   async choose_forecast_model(a) { selectForecastModel(a.model); },
+  async open_juno_scorecard() { vaCloseAll(); await openJunoScorecard(); },
   async refresh_ai_insight() { vaCloseAll(); await loadAIInsight(); },
   async compare_with_peers(a) {
     const s = vaSym(a);
@@ -6522,6 +6710,8 @@ function wire() {
   // Notifications & price alerts
   $("#notifBtn").addEventListener("click", () => openNotifications());
   $("#closeNotif").addEventListener("click", () => $("#notifDialog").close());
+  $("#closeJunoScore").addEventListener("click", () => $("#junoScoreDialog").close());
+  $("#junoScoreLink")?.addEventListener("click", () => openJunoScorecard());
   document.querySelectorAll(".nt-tabs button").forEach((b) => b.addEventListener("click", () => ntTab(b.dataset.tab)));
   $("#ntReadAll").addEventListener("click", async () => { await ntPost("/api/notifications/read", {}); loadNotifications(); });
   $("#ntClear").addEventListener("click", async () => { await ntPost("/api/notifications/clear", {}); loadNotifications(); });
@@ -6830,11 +7020,19 @@ function wire() {
     toggleListen();
   });
   $("#vaClose").addEventListener("click", vaClose);
-  $("#vaMin").addEventListener("click", () => {
-    const min = $("#vaDock").classList.toggle("min");
-    $("#vaMin").setAttribute("aria-label", min ? "Expand the voice agent" : "Minimize the voice agent");
-    $("#vaMin").title = min ? "Expand" : "Minimize";
+  $("#vaMin").addEventListener("click", () => vaSetMin(!$("#vaDock").classList.contains("min")));
+  // FAAM Agent: the top-bar button, ⌘K / Ctrl+K from anywhere, and a one-time intro.
+  $("#agentKbd").textContent = agentShortcut();
+  $("#agentBtn").title = `FAAM Agent: run FAAM by talking or typing (${agentShortcut()})`;
+  $("#agentBtn").addEventListener("click", () => vaLaunch(false));
+  document.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "k") return;
+    e.preventDefault();
+    const dock = $("#vaDock");
+    if (!dock.hidden && !dock.classList.contains("min") && dock.contains(document.activeElement)) vaClose();
+    else vaLaunch(true);
   });
+  setTimeout(() => agentIntro(), 1200);
   $("#vaYes").addEventListener("click", () => vaConfirm(true));
   $("#vaNo").addEventListener("click", () => vaConfirm(false));
   $("#vaForm").addEventListener("submit", (e) => {

@@ -75,6 +75,15 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # What's-new feed: shown in-app, and the top version drives the "new" badge.
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
+    {"version": "1.12", "date": "2026-10-11", "title": "JUNO's live scorecard", "items": [
+        {"tag": "new", "text": "JUNO Signal — JUNO's new numbers model. It gives the odds a stock beats the S&P 500 over the next week, month or 3 months, and lists the signals that moved those odds in plain English."},
+        {"tag": "new", "text": "JUNO's live scorecard — every trading day after the close, JUNO writes down its odds for 40 well-known stocks, and FAAM checks each call when it comes due. Every call stays on the record, right or wrong. Open it from Settings → Forecast model."},
+        {"tag": "improved", "text": "JUNO is still in heavy testing. In its backtest it hasn't beaten a coin flip by enough to count, so JUNO forecasts stay switched off until it does; the scorecard shows how it's doing."},
+        {"tag": "improved", "text": "The FAAM Agent is front and center: a new FAAM Agent button in the top bar, and ⌘K (Ctrl+K on Windows) opens it from anywhere so you can just type a command."},
+        {"tag": "fixed", "text": "The agent's mic animation is centered."},
+        {"tag": "fixed", "text": "Crypto cards in your watchlist line up with the rest again, and nothing spills out of a card in Beginner mode."},
+        {"tag": "improved", "text": "A tidier top bar on smaller windows."},
+    ]},
     {"version": "1.11", "date": "2026-10-11", "title": "Agent voice & JUNO × FAAM", "items": [
         {"tag": "new", "text": "JUNO × FAAM — Llama X JUNO, FAAM's own stock model, is here and still in heavy testing. It's Meta's Llama 3.1, trained by FAAM on 10 years of stock data. It switches on in Forecasts and the Stocks Browser once it passes FAAM's accuracy tests; until then it's marked In heavy testing. Built with Llama."},
         {"tag": "new", "text": "FAAM agent voice — tap the mic and run FAAM by talking: open stocks, change the chart, set alerts, search the web, fill an order ticket, or open any screen. It reads live prices and answers out loud."},
@@ -139,7 +148,7 @@ CHANGELOG = [
 ]
 ROADMAP = [
     {"title": "Practice trading leagues", "text": "Compare your simulated portfolio with friends on a leaderboard."},
-    {"title": "Llama X JUNO", "text": "FAAM's own stock model, built with Llama and trained on 10 years of market data — in heavy testing now."},
+    {"title": "Llama X JUNO", "text": "FAAM's own stock model, built with Llama — in heavy testing now, with a live scorecard. Next: earnings and news signals."},
     {"title": "FAAM in the cloud", "text": "Use FAAM in any browser with nothing to install."},
     {"title": "News alerts", "text": "Get pinged when the story changes on the stocks you follow."},
     {"title": "Mobile apps", "text": "FAAM for iOS and Android."},
@@ -1143,7 +1152,7 @@ FORECAST_MODELS = [
     {"id": "perseverance", "name": "Perseverance", "kind": "Apollo + Artemis ensemble", "live": True, "minTier": 4},
     # Llama X JUNO — Llama 3.1 fine-tuned on 10 years of stock data. Switched on
     # by forecast_models_public() wherever it's installed (see juno/README.md).
-    {"id": "juno", "name": "Llama X JUNO", "kind": "Built with Llama · trained on 10 years of stock data",
+    {"id": "juno", "name": "Llama X JUNO", "kind": "Odds it beats the S&P 500, from 10 years of S&P 500 stocks",
      "live": False, "comingSoon": True, "testing": True},
 ]
 _MODEL_BY_ID = {m["id"]: m for m in FORECAST_MODELS}
@@ -1279,6 +1288,152 @@ def juno_expected_return(probs: dict, sigma: float, days: int, band_mean_z: dict
     move = sigma * math.sqrt(days)
     z = sum(float(probs.get(b, 0)) * mz[b] for b in JUNO_BANDS)
     return (math.exp(z * move) - 1.0) * 100.0
+
+
+# ---------- JUNO Signal: JUNO's numbers model ----------
+# The odds a stock beats the S&P 500 over the next 5, 21 or 63 trading days.
+# A small gradient-boosted tree model trained on 10 years of S&P 500 stocks
+# (juno/signal_train.py) does the predicting: language models are weak at
+# reading numbers, so Llama X JUNO only explains the result when it's installed.
+# The trees are scored here in plain Python, so JUNO Signal runs wherever FAAM
+# does. Training calls signal_features() below, so live and training inputs match.
+SIGNAL_NAME = "JUNO Signal"
+SIGNAL_FILE = ROOT / "models" / "juno-signal.json"
+SIGNAL_FEATURES = (
+    "r5", "r21", "r63", "r126", "r252", "mom12_1", "z21", "z63",
+    "v20", "v60", "max21", "min21", "s50", "s200", "rsi", "fromHigh", "fromLow", "dd60", "trendR2",
+    "volRatio", "dollarVol",
+    "ex21", "ex63", "ex126", "ex252", "beta", "corr", "idioVol",
+    "m21", "m63", "mVol20", "m200",
+    "sec21", "sec63", "rs63", "rs126",
+)
+
+
+def _stdev(xs: list) -> float:
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    m = sum(xs) / n
+    return math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+
+
+def signal_features(closes: list, volumes: list | None = None, market: list | None = None,
+                    sector: list | None = None) -> dict | None:
+    """JUNO Signal's inputs from daily closes, oldest first. `market` (SPY) and
+    `sector` (the stock's sector ETF) are optional and must cover the same days
+    as `closes`. Needs about 140 days; a full year fills in every signal."""
+    c = [float(x or 0) for x in closes[-300:]]
+    n = len(c)
+    if n < 140 or min(c) <= 0:
+        return None
+    last = c[-1]
+    lr = [math.log(c[i] / c[i - 1]) for i in range(1, n)]
+
+    def ret(k, s=c):
+        return (s[-1] / s[-1 - k] - 1.0) * 100.0 if len(s) > k else None
+
+    def sma_gap(k):
+        return (last / (sum(c[-k:]) / k) - 1.0) * 100.0 if n >= k else None
+
+    v20 = _stdev(lr[-20:]) * math.sqrt(252) * 100
+    v60 = _stdev(lr[-60:]) * math.sqrt(252) * 100
+
+    def z(r, k):
+        return r / (v60 * math.sqrt(k / 252)) if r is not None and v60 > 0 else None
+
+    up = down = 0.0
+    for i in range(n - 14, n):
+        d = c[i] - c[i - 1]
+        up, down = up + max(d, 0.0), down + max(-d, 0.0)
+    year, peak, dd = c[-252:], c[-60], 0.0
+    for x in c[-60:]:
+        peak = max(peak, x)
+        dd = min(dd, (x / peak - 1.0) * 100)
+    r21, r63, r126, r252 = ret(21), ret(63), ret(126), ret(252)
+    f = {"r5": ret(5), "r21": r21, "r63": r63, "r126": r126, "r252": r252,
+         "mom12_1": (c[-22] / c[-253] - 1.0) * 100 if n > 252 else None,
+         "z21": z(r21, 21), "z63": z(r63, 63), "v20": v20, "v60": v60,
+         "max21": max(lr[-21:]) * 100, "min21": min(lr[-21:]) * 100,
+         "s50": sma_gap(50), "s200": sma_gap(200), "rsi": 100.0 - 100.0 / (1.0 + up / down) if down else 100.0,
+         "fromHigh": (last / max(year) - 1.0) * 100, "fromLow": (last / min(year) - 1.0) * 100,
+         "dd60": dd, "trendR2": _linreg(c[-60:])[2]}
+    vol = [float(x or 0) for x in (volumes or [])[-60:]]
+    if len(vol) == 60 and sum(vol) > 0:
+        f["volRatio"] = (sum(vol[-5:]) / 5) / (sum(vol) / 60)
+        dollars = sum(p * v for p, v in zip(c[-60:], vol)) / 60
+        f["dollarVol"] = math.log10(dollars) if dollars > 0 else None
+    m = [float(x or 0) for x in (market or [])[-n:]]
+    if len(m) == n and min(m) > 0:
+        mr = [math.log(m[i] / m[i - 1]) for i in range(n - 60, n)]
+        sr = lr[-60:]
+        mm, ms = sum(mr) / 60, sum(sr) / 60
+        cov = sum((a - mm) * (b - ms) for a, b in zip(mr, sr)) / 59
+        sdm, sds = _stdev(mr), _stdev(sr)
+        if sdm > 0 and sds > 0:
+            beta = cov / sdm ** 2
+            f.update(beta=beta, corr=cov / (sdm * sds),
+                     idioVol=_stdev([b - beta * a for a, b in zip(mr, sr)]) * math.sqrt(252) * 100)
+        m21, m63, m126, m252 = ret(21, m), ret(63, m), ret(126, m), ret(252, m)
+        f.update(m21=m21, m63=m63, mVol20=_stdev(mr[-20:]) * math.sqrt(252) * 100,
+                 m200=(m[-1] / (sum(m[-200:]) / 200) - 1.0) * 100 if n >= 200 else None,
+                 ex21=r21 - m21, ex63=r63 - m63,
+                 ex126=r126 - m126 if r126 is not None and m126 is not None else None,
+                 ex252=r252 - m252 if r252 is not None and m252 is not None else None)
+        s = [float(x or 0) for x in (sector or [])[-n:]]
+        if len(s) == n and min(s) > 0:
+            s63, s126 = ret(63, s), ret(126, s)
+            f.update(sec21=ret(21, s) - m21, sec63=s63 - m63, rs63=r63 - s63,
+                     rs126=r126 - s126 if r126 is not None and s126 is not None else None)
+    out = {k: (round(f[k], 5) if isinstance(f.get(k), float) else f.get(k)) for k in SIGNAL_FEATURES}
+    out["sigma"] = round(v60 / 100 / math.sqrt(252), 6)     # typical daily move, for the cone
+    return out
+
+
+_SIGNAL = {"model": None, "mtime": None}
+
+
+def signal_model() -> dict | None:
+    """The trained JUNO Signal model (models/juno-signal.json), or None."""
+    try:
+        mtime = SIGNAL_FILE.stat().st_mtime
+    except OSError:
+        return None
+    if _SIGNAL["mtime"] != mtime:
+        try:
+            m = json.loads(SIGNAL_FILE.read_text())
+            _SIGNAL["model"] = m if isinstance(m, dict) and m.get("horizons") else None
+        except (OSError, ValueError):
+            _SIGNAL["model"] = None
+        _SIGNAL["mtime"] = mtime
+    return _SIGNAL["model"]
+
+
+def _signal_raw(h: dict, x: list) -> float:
+    """Sum of the trees. A node is [feature, threshold, left, right, missingGoesLeft]
+    or a leaf [-1, value]; missing inputs (None) follow the missing branch."""
+    raw = h["baseline"]
+    for nodes in h["trees"]:
+        nd = nodes[0]
+        while nd[0] >= 0:
+            v = x[nd[0]]
+            nd = nodes[nd[2] if (nd[4] if v is None else v <= nd[1]) else nd[3]]
+        raw += nd[1]
+    return raw
+
+
+def _sigmoid(r: float) -> float:
+    return 1.0 / (1.0 + math.exp(-max(-60.0, min(60.0, r))))
+
+
+def signal_score(f: dict, days: int, model: dict | None = None) -> float | None:
+    """Odds (0-1) the stock beats the S&P 500 over `days` trading days."""
+    model = model or signal_model()
+    h = (model or {}).get("horizons", {}).get(str(days))
+    if not h or not f:
+        return None
+    raw = _signal_raw(h, [f.get(k) for k in model["features"]])
+    a, b = h.get("platt") or (1.0, 0.0)          # shrinks overconfident odds toward 50/50
+    return _sigmoid(a * raw + b)
 
 
 def _norm_cdf(z: float) -> float:
@@ -1538,15 +1693,29 @@ def juno_start(wait: float = 120.0) -> bool:
     return False
 
 
+def signal_passed(model: dict | None = None) -> list:
+    """Horizons (trading days) where JUNO Signal passed its walk-forward test."""
+    model = model or signal_model()
+    return sorted(int(d) for d, h in ((model or {}).get("horizons") or {}).items()
+                  if (h.get("eval") or {}).get("passed"))
+
+
 def juno_status() -> dict:
+    """forecastReady: JUNO Signal is trained and passed testing at some horizon,
+    so JUNO forecasts can be picked. installed: Llama X JUNO runs on this Mac,
+    so it can explain things."""
     h = juno_health()
+    model = signal_model()
+    passed = signal_passed(model)
     return {"name": JUNO_NAME, "base": JUNO_BASE, "builtWith": "Built with Llama", "testing": True,
+            "signal": SIGNAL_NAME if model else None, "trained": (model or {}).get("trained"),
+            "passed": passed, "forecastReady": bool(passed),
             "installed": juno_installed() or bool(h), "running": bool(h)}
 
 
 def forecast_models_public() -> list:
-    """The model list, with JUNO switched on wherever it's installed."""
-    ready = juno_status()["installed"]
+    """The model list, with JUNO switched on once JUNO Signal has passed testing."""
+    ready = juno_status()["forecastReady"]
     out = []
     for m in FORECAST_MODELS:
         m = dict(m)
@@ -1556,42 +1725,192 @@ def forecast_models_public() -> list:
     return out
 
 
+try:
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+except Exception:  # noqa: BLE001 — no tz database (e.g. Windows without tzdata)
+    _ET = None
+SIGNAL_MARKET_DRIFT = 0.0003     # the S&P 500's long-run average day (~8% a year), for the cone
+
+
+def _et(t: float | None = None) -> datetime:
+    t = time.time() if t is None else t
+    return datetime.fromtimestamp(t, _ET) if _ET else datetime.utcfromtimestamp(t) - timedelta(hours=4)
+
+
+def _et_now() -> datetime:
+    return _et()
+
+
+def _completed_daily(symbol: str, range_: str = "2y") -> list:
+    """[(ET date, close, volume)] for finished sessions only: today's bar is
+    dropped until 4:15pm ET, so JUNO never scores a half-finished day."""
+    q = yahoo_quote(symbol, range_=range_, interval="1d")
+    if q.get("error"):
+        return []
+    rows = [(_et(p["t"]).strftime("%Y-%m-%d"), float(p["c"]), float(p.get("v") or 0))
+            for p in q.get("history", []) if p.get("c") and p.get("t")]
+    now = _et_now()
+    if rows and rows[-1][0] == now.strftime("%Y-%m-%d") and (now.hour, now.minute) < (16, 15):
+        rows.pop()
+    return rows
+
+
+def signal_series(symbol: str, model: dict | None = None, range_: str = "2y", spy: list | None = None) -> dict | None:
+    """The stock, SPY and its sector ETF lined up on the same days."""
+    model = model or signal_model() or {}
+    stock = _completed_daily(symbol, range_)
+    spy = spy if spy is not None else _completed_daily("SPY", range_)
+    if not stock or not spy:
+        return None
+    mk = {d: c for d, c, _ in spy}
+    rows = [r for r in stock if r[0] in mk]
+    etf = (model.get("sectorEtf") or {}).get(symbol.upper())
+    sector = None
+    if etf and etf != symbol.upper():
+        sc = {d: c for d, c, _ in _completed_daily(etf, range_)}
+        if all(r[0] in sc for r in rows[-300:]):
+            sector = [sc[r[0]] for r in rows]
+    return {"days": [r[0] for r in rows], "closes": [r[1] for r in rows], "volumes": [r[2] for r in rows],
+            "market": [mk[r[0]] for r in rows], "sector": sector, "etf": etf if sector else None}
+
+
+def _signal_feats(s: dict) -> dict | None:
+    return signal_features(s["closes"], s["volumes"], s["market"], s["sector"])
+
+
+def _up_down(v, up="up", down="down"):
+    return up if v >= 0 else down
+
+
+# Plain-English reading of each signal, for "why" lists. The model decides which
+# matter for a given stock; these only say what the number is.
+SIGNAL_SAYS = {
+    "r5": lambda v: f"It's {_up_down(v)} {abs(v):.1f}% over the past week",
+    "r21": lambda v: f"It's {_up_down(v)} {abs(v):.1f}% over the past month",
+    "r63": lambda v: f"It's {_up_down(v)} {abs(v):.0f}% over the past 3 months",
+    "r126": lambda v: f"It's {_up_down(v)} {abs(v):.0f}% over the past 6 months",
+    "r252": lambda v: f"It's {_up_down(v)} {abs(v):.0f}% over the past year",
+    "mom12_1": lambda v: f"Over the past year, leaving out the last month, it's {_up_down(v)} {abs(v):.0f}%",
+    "ex21": lambda v: f"It {_up_down(v, 'beat', 'trailed')} the S&P 500 by {abs(v):.1f} points over the past month",
+    "ex63": lambda v: f"It {_up_down(v, 'beat', 'trailed')} the S&P 500 by {abs(v):.0f} points over 3 months",
+    "ex126": lambda v: f"It {_up_down(v, 'beat', 'trailed')} the S&P 500 by {abs(v):.0f} points over 6 months",
+    "ex252": lambda v: f"It {_up_down(v, 'beat', 'trailed')} the S&P 500 by {abs(v):.0f} points over the past year",
+    "v20": lambda v: f"Lately it swings about {v:.0f}% a year",
+    "v60": lambda v: f"It swings about {v:.0f}% a year (volatility)",
+    "idioVol": lambda v: f"Its own moves, apart from the market, run about {v:.0f}% a year",
+    "beta": lambda v: f"It tends to move {v:.1f}× as much as the market",
+    "corr": lambda v: f"It moves {'closely' if v >= 0.6 else 'loosely' if v >= 0.3 else 'mostly separately'} with the market",
+    "fromHigh": lambda v: "It's at its 52-week high" if v > -0.5 else f"It's {abs(v):.0f}% below its 52-week high",
+    "fromLow": lambda v: f"It's {v:.0f}% above its 52-week low",
+    "rsi": lambda v: f"Its 14-day RSI is {v:.0f}",
+    "s50": lambda v: f"It's {abs(v):.1f}% {_up_down(v, 'above', 'below')} its 50-day average",
+    "s200": lambda v: f"It's {abs(v):.0f}% {_up_down(v, 'above', 'below')} its 200-day average",
+    "max21": lambda v: f"Its biggest one-day jump this month was {v:.1f}%",
+    "min21": lambda v: f"Its biggest one-day drop this month was {abs(v):.1f}%",
+    "dd60": lambda v: f"Its deepest drop in the past 3 months was {abs(v):.0f}%",
+    "trendR2": lambda v: f"Its price has moved {'in a steady line' if v >= 0.7 else 'choppily'} lately",
+    "volRatio": lambda v: f"Trading this week is {v:.1f}× its usual volume",
+    "dollarVol": lambda v: (f"About ${10 ** v / 1e9:,.1f} billion of it trades each day" if v >= 9
+                            else f"About ${10 ** v / 1e6:,.0f} million of it trades each day"),
+    "m21": lambda v: f"The S&P 500 is {_up_down(v)} {abs(v):.1f}% this month",
+    "m63": lambda v: f"The S&P 500 is {_up_down(v)} {abs(v):.0f}% over 3 months",
+    "mVol20": lambda v: f"The market has been swinging about {v:.0f}% a year lately",
+    "m200": lambda v: f"The S&P 500 is {abs(v):.0f}% {_up_down(v, 'above', 'below')} its 200-day average",
+    "sec21": lambda v: f"Its sector {_up_down(v, 'beat', 'trailed')} the S&P 500 by {abs(v):.1f} points this month",
+    "sec63": lambda v: f"Its sector {_up_down(v, 'beat', 'trailed')} the S&P 500 by {abs(v):.0f} points over 3 months",
+    "rs63": lambda v: f"It {_up_down(v, 'beat', 'trailed')} its sector by {abs(v):.0f} points over 3 months",
+    "rs126": lambda v: f"It {_up_down(v, 'beat', 'trailed')} its sector by {abs(v):.0f} points over 6 months",
+}
+
+
+def signal_reasons(f: dict, days: int, model: dict | None = None, k: int = 3) -> list:
+    """The signals that moved this stock's odds most: each is reset to a typical
+    value and the odds re-scored; the biggest changes are the reasons."""
+    model = model or signal_model()
+    h = (model or {}).get("horizons", {}).get(str(days))
+    if not h:
+        return []
+    names, med = model["features"], model.get("medians") or {}
+    slope = (h.get("platt") or (1.0, 0.0))[0]    # the shrink can scale, or even flip, a signal's effect
+    x = [f.get(n) for n in names]
+    base = _signal_raw(h, x)
+    moved = []
+    for i, n in enumerate(names):
+        if n in SIGNAL_SAYS and x[i] is not None and med.get(n) is not None:
+            alt = list(x)
+            alt[i] = med[n]
+            d = slope * (base - _signal_raw(h, alt))
+            moved.append((abs(d), d, n))
+    moved.sort(reverse=True)
+    return [{"signal": n, "text": SIGNAL_SAYS[n](f[n]), "push": "up" if d > 0 else "down"}
+            for size, d, n in moved[:k] if size >= 0.004]
+
+
+def signal_calibration(p: float, days: int, model: dict | None = None) -> dict:
+    """What odds like these meant in testing: how often such stocks beat the
+    market, and their typical edge in units of their own usual move."""
+    model = model or signal_model()
+    rows = (((model or {}).get("horizons") or {}).get(str(days)) or {}).get("calib") or []
+    for upper, beat, z, n in rows:
+        if p <= upper:
+            return {"beatRate": beat, "z": z, "n": n}
+    if rows:
+        _, beat, z, n = rows[-1]
+        return {"beatRate": beat, "z": z, "n": n}
+    return {"beatRate": 0.5, "z": 0.0, "n": 0}
+
+
+def juno_signal_read(symbol: str, horizon: int = 30, model: dict | None = None, series: dict | None = None) -> dict:
+    """JUNO's read on one stock: odds it beats the S&P 500, what that has meant,
+    and why. Used by Forecasts, the Stocks Browser and the scorecard."""
+    model = model or signal_model()
+    if not model:
+        return {"error": f"{SIGNAL_NAME} isn't trained yet."}
+    days = min(JUNO_TRADING_DAYS, key=lambda d: abs(d - int(horizon or 21)))
+    s = series or signal_series(symbol, model)
+    f = _signal_feats(s) if s else None
+    if not f:
+        return {"error": f"{JUNO_NAME} needs about seven months of price history for this symbol."}
+    p = signal_score(f, days, model)
+    cal = signal_calibration(p, days, model)
+    ev = model["horizons"][str(days)].get("eval") or {}
+    return {"days": days, "probBeat": round(p, 4), "f": f, "series": s,
+            "expExcessPct": round(cal["z"] * f["sigma"] * math.sqrt(days) * 100, 2),
+            "history": {"beatRate": cal["beatRate"], "n": cal["n"], "years": ev.get("years")},
+            "reasons": signal_reasons(f, days, model), "passed": bool(ev.get("passed")),
+            "eval": {k: ev.get(k) for k in ("years", "tested", "ic", "icT", "hitRate", "auc", "passed")}}
+
+
+def _juno_explain_read(name: str, symbol: str, r: dict) -> str:
+    """Llama X JUNO's plain-English take on the numbers, when it's installed."""
+    if not juno_installed() or not juno_start(wait=60):
+        return ""
+    facts = "\n".join(f"- {x['text']} ({'raises' if x['push'] == 'up' else 'lowers'} the odds)" for x in r["reasons"])
+    ask = (f"{name} ({symbol}): JUNO Signal gives it a {r['probBeat'] * 100:.0f}% chance of beating the S&P 500 "
+           f"over the next {r['days']} trading days. In testing, stocks with odds like these beat the market "
+           f"{r['history']['beatRate'] * 100:.0f}% of the time.\nWhat moved the odds:\n{facts}\n"
+           "Explain this to a beginner in 2 or 3 short sentences. Don't add facts or advice.")
+    res = _juno_call("POST", "/chat", {"messages": [{"role": "user", "content": ask}], "maxTokens": 160}, timeout=60)
+    return " ".join(str(res.get("text") or "").split())[:700]
+
+
 def juno_forecast(symbol: str, horizon: int = 30) -> dict:
     horizon = max(5, min(int(horizon or 30), 120))
-    if not juno_start():
-        return {"error": f"{JUNO_NAME} is still in heavy testing and isn't switched on here yet.",
-                "juno": juno_status()}
-    q = yahoo_quote(symbol, range_="2y", interval="1d")
+    q = yahoo_quote(symbol, range_="3mo", interval="1d")
     if q.get("error"):
         return {"error": q["error"]}
+    r = juno_signal_read(symbol, horizon)
+    if r.get("error"):
+        return {"error": r["error"], "juno": juno_status()}
+    f, days = r["f"], r["days"]
     hist = [p for p in q.get("history", []) if p.get("c")]
     closes = [p["c"] for p in hist]
-    try:
-        spy = [p["c"] for p in yahoo_quote("SPY", range_="6mo", interval="1d").get("history", []) if p.get("c")]
-    except Exception:  # noqa: BLE001
-        spy = []
-    f = juno_features(closes, [p.get("v") or 0 for p in hist], spy)
-    if not f or f["sigma"] <= 0:
-        return {"error": f"{JUNO_NAME} needs about six months of price history for this symbol."}
-    days = min(JUNO_TRADING_DAYS, key=lambda d: abs(d - horizon))
-    res = _juno_call("POST", "/forecast", {"prompt": juno_prompt(f, days)}, timeout=90)
-    raw = res.get("probs") if isinstance(res.get("probs"), dict) else {}
-    try:
-        probs = {b: max(0.0, float(raw.get(b, 0))) for b in JUNO_BANDS}
-    except (TypeError, ValueError):
-        probs = {}
-    total = sum(probs.values())
-    if not probs or total <= 0:
-        return {"error": f"{JUNO_NAME} didn't answer. Try again in a moment."}
-    probs = {b: v / total for b, v in probs.items()}
-    mz = (juno_health() or {}).get("bandMeanZ") or JUNO_BAND_MEAN_Z
-    exp_days = juno_expected_return(probs, f["sigma"], days, mz)
-    mu, sigma = math.log(1 + exp_days / 100.0) / days, f["sigma"]
-
     s0, last_t = closes[-1], hist[-1]["t"]
-    tail = closes[-min(120, len(closes)):]
-    slope, intercept, r2 = _linreg(tail)
-    base_idx = len(tail) - 1
+    sigma = f["sigma"]
+    mu = SIGNAL_MARKET_DRIFT + math.log(1 + r["expExcessPct"] / 100.0) / days
+    slope, intercept, r2 = _linreg(closes[-min(60, len(closes)):])
+    base_idx = min(60, len(closes)) - 1
     fc = [{"t": last_t, "mean": round(s0, 4), "lo68": round(s0, 4), "hi68": round(s0, 4),
            "lo90": round(s0, 4), "hi90": round(s0, 4), "trend": round(intercept + slope * base_idx, 4)}]
     for k, pt in enumerate(_cone_gbm(s0, mu, sigma, _next_business_days(last_t, horizon)), start=1):
@@ -1599,14 +1918,16 @@ def juno_forecast(symbol: str, horizon: int = 30) -> dict:
         fc.append(pt)
     target = fc[-1]["mean"]
     exp_ret = (target / s0 - 1.0) * 100.0
-    edges = juno_band_edges(sigma, days)
-    bands = [{"band": b, "name": JUNO_BAND_NAMES[b], "p": round(probs[b], 4),
-              "lo": edges[i - 1] if i else None, "hi": edges[i] if i < len(edges) else None}
-             for i, b in enumerate(JUNO_BANDS)]
-    p_up, p_down = probs["D"] + probs["E"], probs["A"] + probs["B"]
+    name = q.get("name", symbol)
+    explanation = _juno_explain_read(name, q.get("symbol", symbol), r)
     spec = next(m for m in forecast_models_public() if m["id"] == "juno")
+    juno = {"name": JUNO_NAME, "signal": SIGNAL_NAME, "testing": True, "days": days, "vs": "S&P 500",
+            "probBeat": r["probBeat"], "expExcessPct": r["expExcessPct"], "history": r["history"],
+            "reasons": r["reasons"], "passed": r["passed"], "eval": r["eval"]}
+    if explanation:
+        juno.update(explanation=explanation, explainedBy=JUNO_NAME, builtWith="Built with Llama", base=JUNO_BASE)
     return {
-        "symbol": q["symbol"], "name": q.get("name", symbol), "price": round(s0, 4),
+        "symbol": q.get("symbol", symbol), "name": name, "price": round(s0, 4),
         "horizon": horizon, "anchorT": last_t,
         "history": [{"t": p["t"], "c": p["c"]} for p in hist[-90:]],
         "forecast": fc,
@@ -1615,11 +1936,188 @@ def juno_forecast(symbol: str, horizon: int = 30) -> dict:
                   "driftDailyPct": round((math.exp(mu) - 1.0) * 100.0, 3), "newsTiltPct": 0.0,
                   "trendR2": round(r2, 2), "direction": "up" if exp_ret >= 0 else "down"},
         "probabilities": _model_probabilities(s0, mu, sigma, horizon),
-        "juno": {"name": JUNO_NAME, "base": JUNO_BASE, "builtWith": "Built with Llama", "testing": True, "days": days,
-                 "bands": bands, "probUp": round(p_up, 4), "probDown": round(p_down, 4),
-                 "expReturnPct": round(exp_days, 2)},
-        "model": spec, "models": forecast_models_public(),
+        "juno": juno, "model": spec, "models": forecast_models_public(),
     }
+
+
+# ---- JUNO's live scorecard. Once a day, after the close, JUNO Signal writes
+# down its odds for a fixed list of well-known stocks; when each call comes due
+# FAAM checks whether the stock really beat the S&P 500. Every call is kept, so
+# the record is public and can't be cherry-picked. The list is fixed (never
+# anyone's watchlist), so the scorecard shows nothing about any account.
+SCORECARD_FILE = DATA_DIR / "juno_scorecard.json"
+SCORECARD_SYMBOLS = (
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "JPM", "V", "MA", "UNH", "JNJ", "PG",
+    "XOM", "CVX", "HD", "KO", "PEP", "MRK", "ABBV", "COST", "WMT", "BAC", "DIS", "NFLX", "ADBE", "CRM",
+    "ORCL", "AMD", "CSCO", "QCOM", "TXN", "NKE", "MCD", "BA", "CAT", "GE", "IBM", "GS",
+)
+SCORECARD_INTERVAL = float(os.environ.get("FAAM_SCORECARD_INTERVAL", "1800"))
+SCORECARD_MAX = 60000
+SCORECARD_ENOUGH = 40          # scored calls before a hit rate means much
+_SC_LOCK = threading.Lock()
+
+
+def _sc_load() -> dict:
+    d = _load_json(SCORECARD_FILE, {})
+    if not isinstance(d, dict) or not isinstance(d.get("calls"), list):
+        d = {"calls": []}
+    return d
+
+
+def _sc_add(new: list) -> None:
+    with _SC_LOCK:
+        d = _sc_load()
+        d["calls"] = (d["calls"] + new)[-SCORECARD_MAX:]
+        _save_json(SCORECARD_FILE, d)
+
+
+def scorecard_make_calls(model: dict | None = None) -> int:
+    """Today's calls (as of the last finished session), once per stock and horizon."""
+    model = model or signal_model()
+    if not model:
+        return 0
+    spy = _completed_daily("SPY")
+    if not spy:
+        return 0
+    session = spy[-1][0]
+    have = {(c.get("sym"), c.get("days"), c.get("start")) for c in _sc_load()["calls"]}
+    horizons = [int(h) for h in model["horizons"]]
+    new = []
+    for sym in SCORECARD_SYMBOLS:
+        if all((sym, h, session) in have for h in horizons):
+            continue
+        s = signal_series(sym, model, spy=spy)
+        if not s or not s["days"] or s["days"][-1] != session:
+            continue
+        f = _signal_feats(s)
+        if not f:
+            continue
+        for h in horizons:
+            if (sym, h, session) not in have:
+                new.append({"sym": sym, "days": h, "start": session, "p": round(signal_score(f, h, model), 4),
+                            "made": datetime.now().isoformat(timespec="seconds"), "model": model.get("trained")})
+    if new:
+        _sc_add(new)
+    return len(new)
+
+
+def _sc_due(start: str, days: int) -> str:
+    """Rough calendar date a call comes due (weekdays only; holidays push it later)."""
+    d, left = datetime.strptime(start, "%Y-%m-%d"), days
+    while left:
+        d += timedelta(days=1)
+        left -= d.weekday() < 5
+    return d.strftime("%Y-%m-%d")
+
+
+def scorecard_resolve() -> int:
+    """Score every call whose window has finished."""
+    today = _et_now().strftime("%Y-%m-%d")
+    with _SC_LOCK:
+        calls = _sc_load()["calls"]
+    due = {}
+    for c in calls:
+        if "result" not in c and _sc_due(c["start"], c["days"]) <= today:
+            due.setdefault(c["sym"], []).append(c)
+    if not due:
+        return 0
+    spy = _completed_daily("SPY")
+    mk = {d: c for d, c, _ in spy}
+    results = {}
+    for sym, cs in due.items():
+        rows = [r for r in _completed_daily(sym) if r[0] in mk]
+        idx = {r[0]: i for i, r in enumerate(rows)}
+        for c in cs:
+            i = idx.get(c["start"])
+            if i is None or i + c["days"] >= len(rows):
+                continue
+            j = i + c["days"]
+            ex = ((rows[j][1] / rows[i][1]) - (mk[rows[j][0]] / mk[rows[i][0]])) * 100
+            results[(sym, c["days"], c["start"])] = {"end": rows[j][0], "excessPct": round(ex, 3), "beat": ex > 0}
+    if not results:
+        return 0
+    with _SC_LOCK:
+        d = _sc_load()
+        for c in d["calls"]:
+            r = results.get((c.get("sym"), c.get("days"), c.get("start")))
+            if r and "result" not in c:
+                c["result"] = r
+        _save_json(SCORECARD_FILE, d)
+    return len(results)
+
+
+def _ranks(xs: list) -> list:
+    order = sorted(range(len(xs)), key=lambda i: xs[i])
+    r = [0.0] * len(xs)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and xs[order[j + 1]] == xs[order[i]]:
+            j += 1
+        for k in range(i, j + 1):
+            r[order[k]] = (i + j) / 2
+        i = j + 1
+    return r
+
+
+def _spearman(a: list, b: list) -> float | None:
+    if len(a) < 3:
+        return None
+    ra, rb = _ranks(a), _ranks(b)
+    ma, mb = sum(ra) / len(ra), sum(rb) / len(rb)
+    cov = sum((x - ma) * (y - mb) for x, y in zip(ra, rb))
+    va, vb = sum((x - ma) ** 2 for x in ra), sum((y - mb) ** 2 for y in rb)
+    return cov / math.sqrt(va * vb) if va and vb else None
+
+
+def scorecard_summary(recent: int = 40) -> dict:
+    model = signal_model()
+    with _SC_LOCK:
+        calls = _sc_load()["calls"]
+    live = {}
+    for h in JUNO_TRADING_DAYS:
+        mine = [c for c in calls if c.get("days") == h]
+        done = [c for c in mine if "result" in c]
+        pending = [c for c in mine if "result" not in c]
+        row = {"days": h, "made": len(mine), "scored": len(done), "pending": len(pending),
+               "enough": len(done) >= SCORECARD_ENOUGH,
+               "nextDue": min((_sc_due(c["start"], h) for c in pending), default=None)}
+        if done:
+            beat = [1.0 if c["result"]["beat"] else 0.0 for c in done]
+            ex = [c["result"]["excessPct"] for c in done]
+            p = [c["p"] for c in done]
+            fav = [e for e, q in zip(ex, p) if q >= 0.5]
+            unf = [e for e, q in zip(ex, p) if q < 0.5]
+            row.update(
+                hitRate=round(sum((q >= 0.5) == (b == 1.0) for q, b in zip(p, beat)) / len(done), 4),
+                beatRate=round(sum(beat) / len(done), 4),
+                brier=round(sum((q - b) ** 2 for q, b in zip(p, beat)) / len(done), 4),
+                favoredMinusRestPct=(round(sum(fav) / len(fav) - sum(unf) / len(unf), 3) if fav and unf else None),
+                rankCorr=(round(_spearman(p, ex), 4) if _spearman(p, ex) is not None else None))
+        live[str(h)] = row
+    backtest = {d: h.get("eval") for d, h in ((model or {}).get("horizons") or {}).items()}
+    shown = sorted(calls, key=lambda c: (c.get("start", ""), c.get("sym", "")), reverse=True)[:recent]
+    return {"name": JUNO_NAME, "signal": SIGNAL_NAME, "testing": True,
+            "since": min((c["start"] for c in calls), default=None),
+            "symbols": list(SCORECARD_SYMBOLS), "enoughAt": SCORECARD_ENOUGH,
+            "live": live, "backtest": backtest, "trained": (model or {}).get("trained"),
+            "recent": [{"sym": c["sym"], "days": c["days"], "start": c["start"], "p": c["p"],
+                        "due": _sc_due(c["start"], c["days"]), **({"result": c["result"]} if "result" in c else {})}
+                       for c in shown]}
+
+
+def scorecard_loop() -> None:
+    """Make today's calls and score finished ones, every half hour."""
+    time.sleep(20)                     # let FAAM finish starting up
+    while True:
+        try:
+            if signal_model():
+                made, scored = scorecard_make_calls(), scorecard_resolve()
+                if made or scored:
+                    print(f"[juno] scorecard: {made} new calls, {scored} scored", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[juno] scorecard error: {e}", flush=True)
+        time.sleep(SCORECARD_INTERVAL)
 
 
 def screen_universe(universe: list) -> list:
@@ -4849,7 +5347,8 @@ def sb_horizon(query: str) -> int:
 
 def sb_pick_model(query: str, choice: str, page: str = "") -> tuple:
     """(model id, why) for this question."""
-    juno_ok = juno_status()["installed"]
+    st = juno_status()
+    juno_ok, juno_forecasts = st["installed"], st["forecastReady"]
     if page:
         return "web", "Page summaries read the page from the web."
     if choice == "web":
@@ -4857,13 +5356,13 @@ def sb_pick_model(query: str, choice: str, page: str = "") -> tuple:
     if choice == "titan":
         return "titan", "You picked Titan."
     if choice == "juno":
-        if juno_ok:
+        if juno_ok or juno_forecasts:
             return "juno", "You picked Llama X JUNO."
         return "web", "Llama X JUNO is still in heavy testing, so FAAM AI answered."
     ticker = sb_resolve_ticker(query)
     news = bool(_SB_NEWS.search(query))
     if _SB_FORECAST.search(query) and ticker and not news:
-        if juno_ok:
+        if juno_forecasts:
             return "juno", f"It's a forecast question about {ticker}, so Llama X JUNO read the charts."
         return "web", "It's a forecast question, and Llama X JUNO is still in heavy testing, so FAAM AI searched the web."
     if _SB_CONCEPT.search(query) and not news and not ticker:
@@ -4887,20 +5386,22 @@ def _sb_juno_forecast(query: str):
     if r.get("error"):
         return None
     j = r["juno"]
-    top = max(j["bands"], key=lambda b: b["p"])
-    rng = (f"below {top['hi']:+.1f}%" if top["lo"] is None else f"above {top['lo']:+.1f}%" if top["hi"] is None
-           else f"{top['lo']:+.1f}% to {top['hi']:+.1f}%")
-    price = r["price"]
+    odds = round(j["probBeat"] * 100)
     paras = [
-        f"Llama X JUNO's read on {r['name']} ({r['symbol']}) for the next {j['days']} trading days: about a "
-        f"{round(j['probUp'] * 100)}% chance it ends higher and {round(j['probDown'] * 100)}% that it ends lower.",
-        f"The most likely outcome is “{top['name']}” ({rng}) at {round(top['p'] * 100)}%. Weighing every "
-        f"outcome, the expected move is about {j['expReturnPct']:+.1f}%, which would put it near "
-        f"${price * (1 + j['expReturnPct'] / 100):,.2f} from ${price:,.2f} today.",
-        "JUNO reads the stock's recent returns, volatility, trend and the market backdrop, not the news. Short-term "
-        "moves are mostly noise, so treat this as odds, not a promise. Information, not financial advice.",
+        f"Llama X JUNO's read on {r['name']} ({r['symbol']}): a {odds}% chance it beats the S&P 500 over the next "
+        f"{j['days']} trading days. In testing ({j['history'].get('years') or 'recent years'}), stocks with odds like "
+        f"these beat the market {round(j['history']['beatRate'] * 100)}% of the time.",
     ]
-    return {"paragraphs": paras, "ticker": r["symbol"], "junoBands": j["bands"], "junoDays": j["days"]}
+    if j.get("explanation"):
+        paras.append(j["explanation"])
+    elif j["reasons"]:
+        paras.append("What moved the odds most: " + "; ".join(
+            f"{x['text'][0].lower()}{x['text'][1:]} ({'raises' if x['push'] == 'up' else 'lowers'} them)"
+            for x in j["reasons"]) + ".")
+    paras.append("JUNO reads price behaviour against the market, not the news, and it's still in heavy testing: "
+                 "check its live scorecard before leaning on it. Odds, not a promise. Information, not "
+                 "financial advice.")
+    return {"paragraphs": paras, "ticker": r["symbol"], "junoRead": j, "llama": bool(j.get("explanation"))}
 
 
 def _sb_juno_explain(query: str):
@@ -4909,7 +5410,7 @@ def _sb_juno_explain(query: str):
     r = _juno_call("POST", "/chat", {"messages": [{"role": "user", "content": query}], "maxTokens": 350},
                    timeout=120)
     paras = _sb_paragraphs(r.get("text") or "")
-    return {"paragraphs": paras} if paras else None
+    return {"paragraphs": paras, "llama": True} if paras else None
 
 
 def _sb_titan(query: str):
@@ -4984,13 +5485,14 @@ def stocks_browser_search(username: str, query, source="web", url="", model="aut
         answer = _sb_web(username, query, source, page)
         if answer.get("error"):
             return answer
+    llama = bool(answer.pop("llama", False))
     tickers = answer.pop("tickers", None) or ([answer.pop("ticker")] if answer.get("ticker") else
                                                [t for t in [sb_resolve_ticker(query)] if t])
     out = {"ok": True, "query": query, "source": source, "page": page,
            "sourceLabel": SB_SOURCES[source]["label"] if chosen == "web" else SB_MODELS[chosen]["name"],
            "sources": [], "more": [], **answer,
            "model": {"id": chosen, "name": SB_MODELS[chosen]["name"],
-                     **({"builtWith": "Built with Llama"} if chosen == "juno" else {})},
+                     **({"builtWith": "Built with Llama"} if llama else {})},
            "quote": sb_quote_card(tickers), "searchedAt": int(now)}
     with _SB_LOCK:
         if len(_SB_CACHE) >= SB_CACHE_MAX:
@@ -5261,6 +5763,8 @@ AGENT_COMMANDS = [
         {"horizon": {"type": "enum", "values": ["1W", "1M", "3M"]}}, ["horizon"], "Forecast {horizon}"),
     _ac("choose_forecast_model", "Pick the forecast model: apollo (fast), artemis (Monte Carlo + news), perseverance (ensemble), juno (Llama X JUNO, FAAM's own stock model, in heavy testing).",
         {"model": {"type": "enum", "values": ["apollo", "artemis", "perseverance", "juno"]}}, ["model"], "Forecast model {model}"),
+    _ac("open_juno_scorecard", "Open JUNO's live scorecard: every call JUNO has made and how it turned out.",
+        label="Open JUNO scorecard"),
     _ac("refresh_ai_insight", "Refresh the AI insight for the current stock.", label="Refresh AI insight"),
     _ac("compare_with_peers", "Compare a stock with its top sector peers (answer appears in chat).",
         {"symbol": _SYM}, [], "Compare with peers"),
@@ -5387,6 +5891,7 @@ AGENT_SAY = {
     "open_stock": "Opening {symbol}.", "set_chart_range": "Showing {range}.",
     "set_chart_view": "Switching to the {view} view.", "toggle_moving_averages": "Done.",
     "set_forecast_horizon": "Forecasting {horizon} ahead.", "choose_forecast_model": "Switching to {model}.",
+    "open_juno_scorecard": "Here's JUNO's scorecard.",
     "refresh_ai_insight": "Refreshing the insight.", "compare_with_peers": "Comparing it with its peers.",
     "ask_faam": "Let me think about that.", "add_to_watchlist": "Adding {symbol} to your watchlist.",
     "add_watchlist_from_interests": "Adding some picks for you.",
@@ -5408,7 +5913,7 @@ AGENT_SAY = {
 
 
 def _agent_say(cmd: dict, args: dict) -> str:
-    if cmd["name"] == "choose_forecast_model" and args.get("model") == "juno" and not juno_status()["installed"]:
+    if cmd["name"] == "choose_forecast_model" and args.get("model") == "juno" and not juno_status()["forecastReady"]:
         return f"{JUNO_NAME} is still in heavy testing, so I kept your current model."
     tpl = AGENT_SAY.get(cmd["name"])
     if tpl:
@@ -7048,12 +7553,14 @@ NOT FINANCIAL ADVICE.
 
         if path == "/api/juno":
             return self._json(juno_status())
+        if path == "/api/juno/scorecard":
+            return self._json(scorecard_summary())
 
         # ---- Stocks Browser, alerts & notifications
         if path == "/api/browser/sources":
             return self._json({"sources": [{"id": k, "label": v["label"]}
                                            for k, v in SB_SOURCES.items()],
-                               "models": [{"id": k, **v, "ready": k != "juno" or juno_status()["installed"]}
+                               "models": [{"id": k, **v, "ready": k != "juno" or juno_status()["forecastReady"] or juno_status()["installed"]}
                                           for k, v in SB_MODELS.items()],
                                "available": bool(OPENAI_API_KEY)})
         if path in ("/api/alerts", "/api/notifications"):
@@ -8327,6 +8834,8 @@ def main() -> None:
         pass
     if os.environ.get("FAAM_ALERTS", "1") != "0":
         threading.Thread(target=alerts_loop, daemon=True, name="alerts").start()
+        if os.environ.get("FAAM_SCORECARD", "1") != "0":
+            threading.Thread(target=scorecard_loop, daemon=True, name="juno-scorecard").start()
         print(f"   ✓ Price alerts checked every {ALERT_INTERVAL}s"
               + (" · Mac notifications on" if DESKTOP_NOTIFS else ""))
     print(f"   → http://localhost:{port}\n")
