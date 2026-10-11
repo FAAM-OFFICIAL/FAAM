@@ -540,7 +540,7 @@ async function checkHealth() {
     const vb = $("#voiceBtn");
     if (vb) {
       vb.disabled = !data.voice_enabled;
-      vb.title = data.voice_enabled ? "Voice mode — talk to FAAM" : "Voice is unavailable right now";
+      vb.title = data.voice_enabled ? "FAAM agent voice — run FAAM by talking" : "Voice is unavailable right now";
     }
   } catch {
     state.aiEnabled = false;
@@ -1017,7 +1017,10 @@ async function loadForecast() {
   renderNewsPanel(null);
   renderMarketsPanel(null);
   const loadingNote = state.forecastModel === "artemis" ? "Running Artemis on"
-    : state.forecastModel === "perseverance" ? "Running Perseverance on" : "Running Apollo on";
+    : state.forecastModel === "perseverance" ? "Running Perseverance on"
+    : state.forecastModel === "juno" ? "Llama X JUNO is reading (the first one takes ~20s to wake up)"
+    : "Running Apollo on";
+  renderJunoPanel(null);
   $("#fcStats").innerHTML = `<div class="fc-loading"><span class="pulse-dots"><span></span><span></span><span></span></span> ${loadingNote} ${escapeHtml(state.active)}…</div>`;
   try {
     const r = await fetch(`/api/forecast/${encodeURIComponent(state.active)}?horizon=${state.horizon}&model=${encodeURIComponent(state.forecastModel || "gbm")}`);
@@ -1027,6 +1030,7 @@ async function loadForecast() {
     state.forecast = d;
     renderForecastChart(d);
     renderForecastStats(d);
+    renderJunoPanel(d.juno);
     renderNewsPanel(d.news);
     renderMarketsPanel(d.probabilities);
   } catch (e) {
@@ -1169,7 +1173,7 @@ const FORECAST_MODELS = [
   { id: "apollo", name: "Apollo", kind: "Drift & volatility engine — fast, no AI cost", minTier: 0 },
   { id: "artemis", name: "Artemis", kind: "Monte Carlo simulation + live news sentiment", minTier: 0 },
   { id: "perseverance", name: "Perseverance", kind: "Apollo + Artemis ensemble — Elite", minTier: 4 },
-  { id: "juno", name: "Juno", kind: "Deep model trained on historical stock data", comingSoon: true },
+  { id: "juno", name: "Llama X JUNO", kind: "Built with Llama · trained on 10 years of stock data", minTier: 0, comingSoon: true, testing: true },
 ];
 
 function modelAvailable(m) {
@@ -1185,8 +1189,9 @@ function renderModelChoices() {
     const avail = modelAvailable(m);
     const sel = m.id === current && avail;
     const badge = m.comingSoon
-      ? '<span class="mc-lock soon">Coming soon</span>'
-      : (avail ? "" : '<span class="mc-lock">Elite</span>');
+      ? `<span class="mc-lock soon">${m.testing ? "In heavy testing" : "Coming soon"}</span>`
+      : !avail ? '<span class="mc-lock">Elite</span>'
+      : m.testing ? '<span class="mc-lock soon">Testing</span>' : "";
     return `<button type="button" class="model-choice${sel ? " sel" : ""}${avail ? "" : " locked"}${m.comingSoon ? " coming" : ""}" data-model="${m.id}" aria-pressed="${sel}"${m.comingSoon ? ' aria-disabled="true"' : ""}>
        <span class="mc-radio"></span>
        <span class="mc-main"><span class="mc-name">${escapeHtml(m.name)}</span><span class="mc-kind">${escapeHtml(m.kind)}</span></span>
@@ -1198,10 +1203,66 @@ function renderModelChoices() {
   });
 }
 
+// JUNO runs on this Mac once it's been trained; the server says whether it's here.
+async function loadJunoStatus() {
+  try {
+    const d = await (await fetch("/api/juno")).json();
+    const m = FORECAST_MODELS.find((x) => x.id === "juno");
+    if (m && d.installed) {
+      m.comingSoon = false;
+      m.kind = "Built with Llama · runs on this Mac · in heavy testing";
+    }
+    if ($("#settingsDialog").open) renderModelChoices();
+  } catch (e) { /* stays "in heavy testing" */ }
+}
+
+function renderJunoPanel(j) {
+  const box = $("#junoPanel");
+  if (!box) return;
+  if (!j) { box.hidden = true; box.replaceChildren(); return; }
+  box.hidden = false;
+  box.replaceChildren();
+  const head = document.createElement("div");
+  head.className = "juno-head";
+  const title = document.createElement("strong");
+  title.textContent = `${j.name} · next ${j.days} trading days`;
+  const odds = document.createElement("span");
+  odds.className = "juno-odds";
+  odds.textContent = `${Math.round(j.probUp * 100)}% up · ${Math.round(j.probDown * 100)}% down`;
+  head.append(title, odds);
+  box.appendChild(head);
+  (j.bands || []).slice().reverse().forEach((b) => {
+    const row = document.createElement("div");
+    row.className = `juno-row b${b.band}`;
+    const label = document.createElement("span");
+    label.className = "juno-label";
+    const range = b.lo == null ? `below ${fmt.pct(b.hi)}` : b.hi == null ? `above ${fmt.pct(b.lo)}` : `${fmt.pct(b.lo)} to ${fmt.pct(b.hi)}`;
+    label.textContent = `${b.name} (${range})`;
+    const bar = document.createElement("span");
+    bar.className = "juno-bar";
+    const fill = document.createElement("i");
+    fill.style.width = `${Math.round(b.p * 100)}%`;
+    bar.appendChild(fill);
+    const pct = document.createElement("span");
+    pct.className = "juno-pct";
+    pct.textContent = `${Math.round(b.p * 100)}%`;
+    row.append(label, bar, pct);
+    box.appendChild(row);
+  });
+  const note = document.createElement("p");
+  note.className = "juno-note";
+  note.textContent = `${j.testing ? "In heavy testing. " : ""}${j.builtWith}. ${j.name} is Meta's ${j.base} fine-tuned by FAAM on years of daily stock data, sized to this stock's usual swings. Odds, not a promise. Information, not financial advice.`;
+  box.appendChild(note);
+}
+
 function selectForecastModel(id) {
   const m = FORECAST_MODELS.find((x) => x.id === id);
   if (!m) return;
-  if (m.comingSoon) { toast(`${m.name} is coming soon — trained on historical stock data.`); return; }
+  if (m.comingSoon) {
+    toast(m.testing ? `${m.name} is still in heavy testing. It switches on once it passes FAAM's accuracy tests.`
+      : `${m.name} is coming soon — trained on historical stock data.`);
+    return;
+  }
   if (!modelAvailable(m)) { toast(`${m.name} is an Elite model.`); openProDialog(); return; }
   state.forecastModel = id;
   try { localStorage.setItem("faam-forecast-model", id); } catch (e) {}
@@ -1214,6 +1275,7 @@ function selectForecastModel(id) {
 
 function openSettings() {
   renderModelChoices();
+  loadJunoStatus();
   renderAddons();
   renderModes();
   renderAiControl();
@@ -2436,34 +2498,45 @@ function sbView(id) {
   $("#sbBody").scrollTop = 0;
 }
 
-function sbSetLook(look) {
-  if (!["faam", "portal", "broadsheet"].includes(look)) look = "faam";
-  $("#sbDialog").dataset.look = look;
-  document.querySelectorAll(".sb-look button").forEach((b) => {
-    b.setAttribute("aria-checked", b.dataset.look === look ? "true" : "false");
-  });
-  sbStore("faam-sb-look", look);
-}
-
 async function sbLoadSources() {
-  if (sbState.sources) return;
   let list = [{ id: "web", label: "All the web" }];
+  let models = [{ id: "auto", name: "Auto", desc: "Best model for the question", ready: true },
+                { id: "web", name: "FAAM AI", desc: "Searches the web", ready: true }];
   try {
     const r = await fetch("/api/browser/sources");
     const d = await r.json();
     if (Array.isArray(d.sources) && d.sources.length) list = d.sources;
-  } catch (e) { /* keep the default */ }
+    if (Array.isArray(d.models) && d.models.length) models = d.models;
+  } catch (e) { /* keep the defaults */ }
   sbState.sources = list;
-  const sel = $("#sbSource");
-  sel.replaceChildren();
-  list.forEach((s) => {
-    const o = document.createElement("option");
-    o.value = s.id;
-    o.textContent = s.label;
-    sel.appendChild(o);
-  });
-  const saved = sbStore("faam-sb-source");
-  if (saved && list.some((s) => s.id === saved)) sel.value = saved;
+  sbState.models = models;
+  const fill = (sel, items, saved) => {
+    const keep = sel.value || saved;
+    sel.replaceChildren();
+    items.forEach((it) => {
+      const o = document.createElement("option");
+      o.value = it.id;
+      o.textContent = it.label || (it.ready === false
+        ? `${it.name} (${it.id === "juno" ? "in heavy testing" : "not set up yet"})` : it.name);
+      if (it.ready === false) o.disabled = true;
+      sel.appendChild(o);
+    });
+    const ok = items.find((it) => it.id === keep && it.ready !== false);
+    if (ok) sel.value = keep;
+  };
+  fill($("#sbSource"), list, sbStore("faam-sb-source"));
+  fill($("#sbModel"), models, sbStore("faam-sb-model"));
+  sbModelChanged();
+}
+
+// The source list only matters when the web search might answer.
+function sbModelChanged() {
+  const id = $("#sbModel").value || "auto";
+  const m = (sbState.models || []).find((x) => x.id === id);
+  $("#sbModelHint").textContent = m ? m.desc : "";
+  const webish = id === "auto" || id === "web";
+  $("#sbSourcePick").classList.toggle("off", !webish);
+  $("#sbSource").disabled = !webish;
 }
 
 function sbChip(label, onClick) {
@@ -2496,7 +2569,6 @@ function sbRenderHome() {
 async function openStocksBrowser(query) {
   const d = $("#sbDialog");
   if (!d.open) d.showModal();
-  sbSetLook(sbStore("faam-sb-look") || "faam");
   await sbLoadSources();
   if (query) return sbSearch(query);
   if (sbState.idx < 0) { sbRenderHome(); sbView("sbHome"); }
@@ -2520,7 +2592,8 @@ async function sbSearch(query, opts = {}) {
   query = String(query || "").trim();
   if (!query && !opts.page) return;
   const source = opts.page ? "web" : $("#sbSource").value || "web";
-  const entry = { query: opts.title || query, source, page: opts.page || "" };
+  const model = opts.page ? "web" : $("#sbModel").value || "auto";
+  const entry = { query: opts.title || query, source, model, page: opts.page || "" };
   // A new search drops anything "forward" of where we are, like a real browser.
   sbState.stack = sbState.stack.slice(0, sbState.idx + 1);
   sbState.stack.push(entry);
@@ -2531,9 +2604,17 @@ async function sbSearch(query, opts = {}) {
     sbStore("faam-sb-recent", JSON.stringify(rec));
   }
   $("#sbInput").value = opts.page ? "" : query;
-  $("#sbLoadKicker").textContent = opts.page ? "Summarizing" : `Searching · ${$("#sbSource").selectedOptions[0]?.textContent || "All the web"}`;
+  const modelName = $("#sbModel").selectedOptions[0]?.textContent || "Auto";
+  $("#sbLoadKicker").textContent = opts.page ? "Summarizing"
+    : model === "web" ? `Searching · ${$("#sbSource").selectedOptions[0]?.textContent || "All the web"}`
+    : model === "auto" ? "Picking the best model" : `Asking ${modelName}`;
   $("#sbLoadQ").textContent = entry.query;
   const steps = [...document.querySelectorAll("#sbSteps li")];
+  const labels = model === "web" || opts.page ? ["Searching the web", "Reading the sources", "Writing your brief"]
+    : model === "juno" ? ["Reading the stock's signals", "Llama X JUNO is thinking", "Writing it up"]
+    : model === "titan" ? ["Checking what Titan knows", "Finding the answer", "Writing it up"]
+    : ["Picking the best model for this", "Finding the answer", "Writing it up"];
+  steps.forEach((li, i) => { li.textContent = labels[i] || li.textContent; });
   steps.forEach((li, i) => li.className = i === 0 ? "on" : "");
   sbView("sbLoading");
   const ticket = ++sbState.busy;
@@ -2542,7 +2623,7 @@ async function sbSearch(query, opts = {}) {
   try {
     const r = await fetch("/api/browser/search", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query: opts.page ? (opts.title || "") : query, source, url: opts.page || "" }),
+      body: JSON.stringify({ query: opts.page ? (opts.title || "") : query, source, model, url: opts.page || "" }),
     });
     const d = await r.json();
     if (r.status === 402) throw new Error(d.message || "You've reached your plan's usage limit.");
@@ -2672,12 +2753,55 @@ function sbTitleFromUrl(url, domain) {
   return segs.slice(-3).join(" › ");
 }
 
+function sbRenderJuno(d) {
+  const box = $("#sbJuno");
+  box.replaceChildren();
+  box.hidden = !(d.junoBands && d.junoBands.length);
+  if (box.hidden) return;
+  const rows = d.junoBands.slice().reverse();
+  rows.forEach((b) => {
+    const row = document.createElement("div");
+    row.className = `juno-row b${b.band}`;
+    const label = document.createElement("span");
+    label.className = "juno-label";
+    const range = b.lo == null ? `below ${fmt.pct(b.hi)}` : b.hi == null ? `above ${fmt.pct(b.lo)}` : `${fmt.pct(b.lo)} to ${fmt.pct(b.hi)}`;
+    label.textContent = `${b.name} (${range})`;
+    const bar = document.createElement("span");
+    bar.className = "juno-bar";
+    const fill = document.createElement("i");
+    fill.style.width = `${Math.round(b.p * 100)}%`;
+    bar.appendChild(fill);
+    const pct = document.createElement("span");
+    pct.className = "juno-pct";
+    pct.textContent = `${Math.round(b.p * 100)}%`;
+    row.append(label, bar, pct);
+    box.appendChild(row);
+  });
+}
+
 function sbRenderResult(d, entry) {
   const nSrc = (d.sources || []).length;
+  const m = d.model || { id: "web", name: "FAAM AI" };
   $("#sbKicker").textContent = entry.page
     ? `Page summary · ${d.sources[0]?.domain || "the web"}`
-    : `AI brief · ${d.sourceLabel || "All the web"} · ${nSrc} source${nSrc === 1 ? "" : "s"}`;
+    : m.id === "web" ? `AI brief · ${d.sourceLabel || "All the web"} · ${nSrc} source${nSrc === 1 ? "" : "s"}`
+    : m.id === "juno" ? (d.junoBands ? `Forecast · next ${d.junoDays} trading days` : "Explainer")
+    : "Quick answer";
   $("#sbTitle").textContent = entry.query;
+  const who = $("#sbAnswered");
+  who.replaceChildren();
+  const name = document.createElement("b");
+  name.textContent = m.name + (m.builtWith ? ` · ${m.builtWith}` : "");
+  who.append("Answered by ", name);
+  if (d.modelReason) who.append(` — ${d.modelReason}`);
+  sbRenderJuno(d);
+  $("#sbNote").textContent = m.id === "juno"
+    ? (d.junoBands ? "Odds from Llama X JUNO (in heavy testing), Meta's Llama 3.1 fine-tuned by FAAM on years of stock data. Not a promise. Information, not financial advice."
+      : "Written by Llama X JUNO (Built with Llama, in heavy testing), running on this Mac. Information, not financial advice.")
+    : m.id === "titan" ? "Answered by Titan, FAAM's built-in AI. Information, not financial advice."
+    : "Written by FAAM AI from the sources below. Information, not financial advice.";
+  $("#sbSourcesH").hidden = !nSrc;
+  $("#sbSources").hidden = !nSrc;
   const brief = $("#sbBrief");
   brief.replaceChildren();
   (d.paragraphs || []).forEach((p, i) => {
@@ -2904,6 +3028,551 @@ async function createAlert(ev) {
     ? `Added. ${d.alert.symbol} is already there ($${Number(d.price).toFixed(2)}), so it'll fire on the next check.`
     : `Added. ${d.alert.symbol} is at $${Number(d.price).toFixed(2)} now; we'll tell you when ${d.alert.label.replace(d.alert.symbol + " ", "it ")}.`;
 }
+
+/* ---------- FAAM AI agent voice ---------- */
+// Say (or type) what you want; the server maps it onto FAAM commands and this
+// page carries them out — one handler per command, covering every button.
+// Anything that deletes or signs out asks first. Orders are only filled in.
+const va = { history: [], pending: null, done: [], seq: 0 };
+const VA_SCREENS = {
+  sbDialog: "Stocks Browser", paperDialogSP: "Stock Paper", learnDialog: "FAAM Learn",
+  notifDialog: "Notifications", settingsDialog: "Settings", orderDialog: "Order ticket",
+  chatDialog: "Chat", accountDialog: "Account", screenerDialog: "Screener", titanDialog: "Titan",
+  ideasDialog: "Trade ideas", recapDialog: "Daily recap", layoutDialog: "Layout editor",
+  adviserDialog: "Adviser profile", changelogDialog: "What's new", proDialog: "Plans",
+  simDialog: "Simulator", courseDialog: "Stock course", positionDialog: "Add position",
+  tickerDialog: "Add to watchlist",
+};
+const VA_EXAMPLES = [
+  "Show me Nvidia", "Set an alert if Apple drops below 300", "Search WSJ for Fed news",
+  "Switch to dark mode", "Open FAAM Learn", "Fill a ticket to buy 5 shares of Tesla",
+];
+
+// The dock lives inside whichever modal is on top: a modal makes everything
+// outside it unclickable, so this is how the mic stays reachable everywhere.
+(function vaTrackDialogs() {
+  const proto = window.HTMLDialogElement && HTMLDialogElement.prototype;
+  if (!proto || proto.__vaPatched) return;
+  const orig = proto.showModal;
+  proto.showModal = function () {
+    const r = orig.apply(this, arguments);
+    this.dataset.vaSeq = String(++va.seq);
+    vaFollow();
+    return r;
+  };
+  proto.__vaPatched = true;
+  document.addEventListener("close", () => setTimeout(vaFollow, 0), true);
+})();
+
+function vaTopDialog() {
+  let top = null, best = -1;
+  document.querySelectorAll("dialog[open]").forEach((d) => {
+    let modal = false;
+    try { modal = d.matches(":modal"); } catch (e) { modal = d.id !== "toastDialog"; }
+    const seq = Number(d.dataset.vaSeq || 0);
+    if (modal && seq > best) { best = seq; top = d; }
+  });
+  return top;
+}
+
+function vaFollow() {
+  const dock = $("#vaDock");
+  if (!dock || dock.hidden) return;
+  const host = vaTopDialog() || document.body;
+  if (dock.parentElement !== host) host.appendChild(dock);
+}
+
+function vaOpenDialogs() {
+  return [...document.querySelectorAll("dialog[open]")].filter((d) => d.id !== "toastDialog");
+}
+
+function vaCloseAll() { vaOpenDialogs().forEach((d) => d.close()); }
+
+function vaContext() {
+  return {
+    active: state.active || "",
+    screens: vaOpenDialogs().map((d) => VA_SCREENS[d.id]).filter(Boolean),
+    watchlist: (state.watchlist || []).map((s) => (typeof s === "string" ? s : s.symbol)).filter(Boolean),
+  };
+}
+
+function vaOpen(listen) {
+  if (!gate("voice")) return;
+  const dock = $("#vaDock");
+  dock.hidden = false;
+  vaFollow();
+  vaRenderExamples();
+  if (listen && voiceSupported()) startListening();
+  else setVoiceState("idle");
+}
+
+function vaClose() {
+  stopListening();
+  releaseMic();
+  stopSpeaking();
+  vaClearPending();
+  setVoiceState("idle");
+  const dock = $("#vaDock");
+  dock.hidden = true;
+  document.body.appendChild(dock);
+}
+
+function vaRenderExamples() {
+  const box = $("#vaExamples");
+  box.hidden = !!$("#vaHeard").textContent;
+  if (box.childElementCount) return;
+  VA_EXAMPLES.forEach((q) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = `“${q}”`;
+    b.addEventListener("click", () => vaHandle(q, { spoken: false }));
+    box.appendChild(b);
+  });
+}
+
+function vaLog(label, ok, note) {
+  va.done.unshift({ label, ok, note });
+  va.done = va.done.slice(0, 3);
+  const list = $("#vaDone");
+  list.replaceChildren();
+  va.done.forEach((d) => {
+    const li = document.createElement("li");
+    li.className = d.ok ? "ok" : "bad";
+    li.textContent = d.label + (d.note ? ` — ${d.note}` : "");
+    list.appendChild(li);
+  });
+}
+
+async function vaSpeak(text, opts) {
+  $("#vaSay").textContent = text;
+  if (opts && opts.spoken && text) {
+    setVoiceState("speaking");
+    await speak(text);
+  }
+  if (voice.vstate === "speaking" || voice.vstate === "thinking") setVoiceState("idle", "Done. Say or type another command.");
+}
+
+async function vaHandle(text, opts = {}) {
+  text = String(text || "").trim();
+  if (!text) return;
+  $("#vaHeard").textContent = `“${text}”`;
+  $("#vaExamples").hidden = true;
+  if (va.pending) {
+    if (/^(yes|yeah|yep|yup|sure|ok(ay)?|confirm|do it|go ahead|please do)\b/i.test(text)) return vaConfirm(true);
+    if (/^(no|nope|cancel|stop|don'?t|never ?mind)\b/i.test(text)) return vaConfirm(false);
+    vaClearPending();
+  }
+  if (/^(stop|quiet|be quiet|shh+)[.!]?$/i.test(text)) { stopSpeaking(); setVoiceState("idle"); return; }
+  va.lastOpts = opts;
+  setVoiceState("thinking");
+  let d;
+  try {
+    const r = await fetch("/api/agent", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, context: vaContext(), history: va.history }),
+    });
+    d = await r.json();
+    if (r.status === 402) throw new Error(d.message || "You've reached your plan's usage limit.");
+    if (!r.ok || d.error) throw new Error(d.error || "Something went wrong.");
+  } catch (e) {
+    setVoiceState("idle");
+    return vaSpeak(e.message, opts);
+  }
+  const actions = d.actions || [];
+  va.history.push({ role: "user", content: text },
+    { role: "assistant", content: d.say + (actions.length ? ` [did: ${actions.map((a) => a.name).join(", ")}]` : "") });
+  va.history = va.history.slice(-12);
+  if (actions.length && !(await requestAiControl())) {
+    setVoiceState("idle");
+    return vaSpeak("Okay, I won't touch the dashboard. You can allow assistant control in Settings any time.", opts);
+  }
+  $("#vaSay").textContent = d.say;
+  const sayP = opts.spoken && d.say ? (setVoiceState("speaking"), speak(d.say)) : null;
+  const extra = await vaRun(actions, opts);
+  if (sayP) await sayP;
+  if (extra.length) await vaSpeak(extra.join(" "), opts);
+  else if (voice.vstate === "speaking" || voice.vstate === "thinking") setVoiceState("idle", "Done. Say or type another command.");
+}
+
+// Run actions in order. A "confirm" action pauses everything after it.
+async function vaRun(actions, opts) {
+  const spoken = [];
+  for (let i = 0; i < actions.length; i++) {
+    const a = actions[i];
+    if (a.confirm) {
+      va.pending = { action: a, rest: actions.slice(i + 1), opts };
+      $("#vaConfirmText").textContent = `${a.label}?`;
+      $("#vaConfirm").hidden = false;
+      spoken.push(`${a.label}? Say yes or tap Confirm.`);
+      return spoken;
+    }
+    const line = await vaExec(a);
+    if (line) spoken.push(line);
+  }
+  return spoken;
+}
+
+async function vaExec(a) {
+  const fn = VA_HANDLERS[a.name];
+  if (!fn) { vaLog(a.label, false, "not available"); return ""; }
+  try {
+    const out = await fn(a.args || {});
+    vaLog(a.label, true);
+    vaFollow();
+    return typeof out === "string" ? out : "";
+  } catch (e) {
+    vaLog(a.label, false, e.message);
+    return e.message;
+  }
+}
+
+function vaClearPending() {
+  va.pending = null;
+  const c = $("#vaConfirm");
+  if (c) c.hidden = true;
+}
+
+async function vaConfirm(yes) {
+  const p = va.pending;
+  vaClearPending();
+  if (!p) return;
+  if (!yes) return vaSpeak("Okay, cancelled.", p.opts);
+  const spoken = [];
+  const line = await vaExec(p.action);
+  if (line) spoken.push(line);
+  spoken.push(...(await vaRun(p.rest, p.opts)));
+  await vaSpeak(spoken.join(" ") || "Done.", p.opts);
+}
+
+// ---- helpers the handlers share
+function vaSym(a) {
+  const s = a.symbol || state.active;
+  if (!s) throw new Error("Which stock?");
+  return s;
+}
+
+async function vaStock(symbol) {
+  vaCloseAll();
+  if (state.active !== symbol || !state.lastQuote || state.lastQuote.symbol !== symbol) await selectStock(symbol);
+  return state.lastQuote;
+}
+
+function vaPriceLine(q) {
+  if (!q || q.price == null) return "";
+  const pct = Number(q.pct || 0);
+  const move = Math.abs(pct) < 0.005 ? "flat today" : `${pct > 0 ? "up" : "down"} ${Math.abs(pct).toFixed(2)} percent today`;
+  return `${q.name || q.symbol} is at $${fmt.price(q.price)}, ${move}.`;
+}
+
+function vaClick(sel) {
+  const el = typeof sel === "string" ? $(sel) : sel;
+  if (!el) throw new Error("That isn't on screen right now.");
+  el.click();
+}
+
+async function vaEnsureLearn() {
+  if (!$("#learnDialog").open) await openLearn();
+}
+
+async function vaEnsureBrowser() {
+  if (!$("#sbDialog").open) await openStocksBrowser();
+}
+
+function vaScrollTarget() {
+  const top = vaTopDialog();
+  if (!top) return document.scrollingElement || document.documentElement;
+  const all = [top, ...top.querySelectorAll("*")];
+  return all.find((el) => {
+    const s = getComputedStyle(el);
+    return /(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 4;
+  }) || top;
+}
+
+async function vaPortfolio() {
+  const r = await fetch("/api/portfolio");
+  const d = await r.json();
+  return d.positions || d.rows || [];
+}
+
+// Buttons that delete, publish, post or sign out are confirmed first.
+const VA_RISKY = /\b(delete|remove|clear|reset|log ?out|sign ?out|publish|post|comment|send|disconnect|buy at|sell at|place)\b/i;
+
+function vaButtonText(el) {
+  return (el.getAttribute("aria-label") || el.textContent || el.title || "").replace(/\s+/g, " ").trim();
+}
+
+function vaFindButton(label) {
+  const root = vaTopDialog() || document;
+  const want = String(label || "").toLowerCase().replace(/[“”"'.!?]/g, "").trim();
+  if (!want) return null;
+  const cands = [...root.querySelectorAll("button, [role=button], a[href], summary, .chip")]
+    .filter((el) => !el.closest("#vaDock") && el.offsetParent !== null && !el.disabled);
+  const t = (el) => vaButtonText(el).toLowerCase().replace(/[“”"'.!?▸→←›]/g, "").trim();
+  return cands.find((el) => t(el) === want) || cands.find((el) => t(el).startsWith(want))
+    || cands.find((el) => t(el).includes(want)) || cands.find((el) => (el.title || "").toLowerCase().includes(want)) || null;
+}
+
+const VA_RANGES = { "1D": "1d", "1W": "5d", "1M": "1mo", "3M": "3mo", "1Y": "1y", "5Y": "5y" };
+const VA_HORIZON = { "1W": "7", "1M": "30", "3M": "90" };
+
+const VA_HANDLERS = {
+  // Stocks & the chart
+  async open_stock(a) { return vaPriceLine(await vaStock(a.symbol)); },
+  async set_chart_range(a) {
+    vaCloseAll();
+    vaClick(document.querySelector(`#rangeTabs button[data-range="${VA_RANGES[a.range]}"]`));
+  },
+  async set_chart_view(a) { vaCloseAll(); setView(a.view); },
+  async toggle_moving_averages(a) {
+    vaCloseAll();
+    if (state.view !== "line") setView("line");
+    if (a.on === undefined || !!state.smaOn !== a.on) vaClick("#smaToggle");
+  },
+  async set_forecast_horizon(a) {
+    vaCloseAll();
+    if (state.view !== "forecast") setView("forecast");
+    vaClick(document.querySelector(`#fcHorizonTabs button[data-h="${VA_HORIZON[a.horizon]}"]`));
+  },
+  async choose_forecast_model(a) { selectForecastModel(a.model); },
+  async refresh_ai_insight() { vaCloseAll(); await loadAIInsight(); },
+  async compare_with_peers(a) {
+    const s = vaSym(a);
+    if (a.symbol && a.symbol !== state.active) await vaStock(a.symbol);
+    const text = await voiceChat(`Compare ${s} to its top 3 sector peers — strengths and weaknesses.`);
+    return text;
+  },
+  async ask_faam(a) { return voiceChat(a.question); },
+  // Watchlist & portfolio
+  async add_to_watchlist(a) { vaCloseAll(); await addTicker(a.symbol); },
+  async remove_from_watchlist(a) { await removeTicker(a.symbol); },
+  async add_watchlist_from_interests() {
+    if (!ratedThemeNames().length) { openSettings(); throw new Error("Rate a few areas in Portfolio focus first."); }
+    const added = await seedWatchlistFromInterests(6);
+    return added.length ? `Added ${added.length} tickers to your watchlist.` : "Those are already on your watchlist.";
+  },
+  async add_portfolio_position(a) {
+    const body = { symbol: a.symbol };
+    if (a.dollars) body.amount = a.dollars;
+    else if (a.shares) {
+      body.shares = a.shares;
+      body.cost = a.cost != null ? a.cost : ((state.lastQuote && state.lastQuote.symbol === a.symbol) ? state.lastQuote.price : null);
+      if (body.cost == null) {
+        openPositionDialog();
+        $("#posSymbol").value = a.symbol;
+        $("#posShares").value = a.shares;
+        throw new Error("What did you pay per share? I filled in the rest.");
+      }
+    } else {
+      openPositionDialog();
+      $("#posSymbol").value = a.symbol;
+      throw new Error("How many shares, or how many dollars?");
+    }
+    const d = await addPositionReq(body);
+    return `Added ${fmt.shares ? fmt.shares(d.shares) : d.shares} shares of ${a.symbol} to your portfolio.`;
+  },
+  async remove_portfolio_position(a) {
+    const rows = (await vaPortfolio()).filter((p) => String(p.symbol).toUpperCase() === a.symbol);
+    if (!rows.length) throw new Error(`There's no ${a.symbol} in your portfolio.`);
+    for (const p of rows) await removePosition(p.id);
+    return `Removed ${a.symbol} from your portfolio.`;
+  },
+  async show_portfolio() {
+    vaCloseAll();
+    const p = document.querySelector(".portfolio-panel, #portfolioPanel, [data-block=\"portfolio\"]");
+    if (p) p.scrollIntoView({ behavior: "smooth", block: "start" });
+  },
+  async fill_order_ticket(a) {
+    await openOrderTicket();
+    setOrderSide(a.side);
+    setOrderMode(a.unit === "dollars" ? "dollars" : "shares");
+    $("#orderSymbol").value = a.symbol || state.active || "";
+    if (a.quantity) $("#orderQty").value = a.quantity;
+    if (a.broker) $("#brokerSelect").value = a.broker;
+    updateReviewLabel();
+    await updateEstimate();
+    if (a.symbol && a.symbol !== state.active) selectStock(a.symbol);
+    return "Review the ticket — FAAM doesn't place trades; you finish it at your broker.";
+  },
+  // Research
+  async search_stocks_browser(a) {
+    await vaEnsureBrowser();
+    if (a.source) { $("#sbSource").value = a.source; sbStore("faam-sb-source", a.source); }
+    if (a.model && [...$("#sbModel").options].some((o) => o.value === a.model && !o.disabled)) {
+      $("#sbModel").value = a.model;
+      sbModelChanged();
+    }
+    await sbSearch(a.query);
+    const e = sbState.stack[sbState.idx];
+    if (e && e.error) throw new Error(e.error);
+    const lead = e && e.result && (e.result.paragraphs || [])[0];
+    return lead ? lead.replace(/\[\[\d+\]\]/g, "").slice(0, 420) : "";
+  },
+  async open_stocks_browser() { await openStocksBrowser(); },
+  async browser_navigate(a) {
+    await vaEnsureBrowser();
+    vaClick({ back: "#sbBackBtn", forward: "#sbFwdBtn", home: "#sbHomeBtn" }[a.to]);
+  },
+  async run_screener(a) {
+    if (!gate("screener")) throw new Error("The screener is a Pro feature.");
+    openScreener();
+    $("#screenerInput").value = a.criteria;
+    runScreen(a.criteria);
+  },
+  async open_screener() { if (gate("screener")) openScreener(); },
+  async open_trade_ideas(a) { openIdeas(); if (a.refresh) loadIdeas(); },
+  async ask_titan(a) { openTitan(); if (a.question) titanAsk(a.question); },
+  async open_daily_recap(a) {
+    if (!gate("recap")) throw new Error("The daily recap is a Max feature.");
+    await openRecap();
+    if (a.play) playReel(false);
+  },
+  // Stock Paper
+  async open_stock_paper(a) {
+    await openStockPaper();
+    if (!a.story) return;
+    const words = a.story.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
+    let best = null, score = 0;
+    (spState.posts || []).forEach((p) => {
+      const t = String(p.title || "").toLowerCase();
+      const s = words.filter((w) => t.includes(w)).length;
+      if (s > score) { score = s; best = p; }
+    });
+    if (best) await openStory(best.id);
+    else return "I couldn't find that story, so here's the front page.";
+  },
+  async write_paper_comment(a) {
+    const box = $("#spCommentText");
+    if (!$("#paperDialogSP").open || !box || box.closest("[hidden]")) throw new Error("Open a story first.");
+    box.value = a.text;
+    box.focus();
+    return "Your comment is ready — tap Comment to post it.";
+  },
+  async draft_paper_story(a) {
+    await openStockPaper();
+    spView("spFront");
+    $("#spAiPrompt").value = a.prompt;
+    await spAiDraft();
+  },
+  async polish_paper_story(a) {
+    if (!$("#paperDialogSP").open) await openStockPaper();
+    if (a.grammar !== undefined) $("#spOptGrammar").checked = a.grammar;
+    if (a.developing !== undefined) $("#spOptDeveloping").checked = a.developing;
+    if (a.picture !== undefined) $("#spOptPicture").checked = a.picture;
+    await spAiPolish();
+  },
+  async publish_paper_story() {
+    if (!$("#paperDialogSP").open) throw new Error("Open the Stock Paper composer first.");
+    vaClick("#spPublish");
+  },
+  // FAAM Learn
+  async open_learn() { await openLearn(); },
+  async open_learn_course(a) { await vaEnsureLearn(); await openLearnCourse(a.course); },
+  async start_learn_diagnostic() { await vaEnsureLearn(); await learnStartDiagnostic(); },
+  async claim_daily_reward() { await vaEnsureLearn(); await claimDailyReward(); },
+  async open_leaderboard() { await vaEnsureLearn(); await openLeaderboard(); },
+  async open_stock_course() { await openCourse(); },
+  // Alerts & notifications
+  async set_price_alert(a) {
+    const d = await ntPost("/api/alerts/create", { symbol: a.symbol, kind: a.condition, value: a.value });
+    if (d.error) throw new Error(d.error);
+    ntState.alerts = d.alerts || [];
+    if ($("#notifDialog").open) renderAlerts();
+    return `Alert set: ${d.alert.label}.` + (d.alreadyMet ? " It's already there, so it'll go off on the next check." : "");
+  },
+  async delete_price_alert(a) {
+    const r = await fetch("/api/alerts");
+    const mine = ((await r.json()).alerts || []).filter((x) => x.symbol === a.symbol);
+    if (!mine.length) throw new Error(`You don't have any ${a.symbol} alerts.`);
+    for (const x of mine) await ntPost("/api/alerts/delete", { id: x.id });
+    if ($("#notifDialog").open) loadAlerts();
+    return `Deleted ${mine.length} ${a.symbol} alert${mine.length > 1 ? "s" : ""}.`;
+  },
+  async open_notifications(a) { await openNotifications(a.tab || "inbox"); },
+  async mark_notifications_read() { await ntPost("/api/notifications/read", {}); await loadNotifications(); },
+  async clear_notifications() { await ntPost("/api/notifications/clear", {}); await loadNotifications(); },
+  // Settings, account & the app
+  async open_settings() { openSettings(); },
+  async set_beginner_mode(a) { if (!!state.beginner !== a.on) toggleBeginner(); },
+  async set_prediction_markets(a) { if (!!state.predictionMarkets !== a.on) togglePredMarkets(); },
+  async set_theme(a) { setTheme(a.theme); },
+  async start_tour() { vaCloseAll(); openCoach(0); },
+  async open_layout_editor() { openLayout(); },
+  async design_layout(a) {
+    openLayout();
+    setLayoutPane("ai");
+    $("#layAiPrompt").value = a.prompt;
+    await aiDesignLayout();
+  },
+  async reset_layout() { useDefaultLayout(); },
+  async open_adviser_profile() { if (gate("adviser")) await openAdviser(); },
+  async use_adviser_template() {
+    if (!gate("adviser")) throw new Error("Adviser profiles are a Max feature.");
+    await openAdviser();
+    $("#adviserText").value = ADVISER_TEMPLATE;
+    updateAdviserCount();
+    return "I filled in the template — edit it if you like, then tap Save.";
+  },
+  async clear_adviser_profile() {
+    await saveAdviser("");
+    if (state.active) loadAIInsight();
+    return "Your adviser profile is cleared.";
+  },
+  async open_whats_new() { await openChangelog(); },
+  async open_plans() { openProDialog(); },
+  async open_account() { openAccount(); },
+  async open_connected_apps() {
+    openAccount();
+    setTimeout(() => document.querySelector("#accountDialog .cx-section")?.scrollIntoView({ block: "start", behavior: "smooth" }), 200);
+  },
+  async log_out() { await logout(); },
+  async open_in_web_browser() {
+    if (!isNativeApp()) return "You're already using FAAM in a web browser.";
+    openInBrowser();
+  },
+  async open_chat() { openDialog("chatDialog", "dialogInput"); },
+  async close_window() { const t = vaTopDialog(); if (t) t.close(); },
+  async close_everything() { vaCloseAll(); },
+  async scroll_page(a) {
+    const el = vaScrollTarget();
+    const h = el.clientHeight * 0.8;
+    const to = { up: el.scrollTop - h, down: el.scrollTop + h, top: 0, bottom: el.scrollHeight }[a.direction];
+    el.scrollTo({ top: to, behavior: "smooth" });
+  },
+  async stop_voice() { setTimeout(vaClose, 1200); },
+  // Catch-alls: any visible button by its words, and quiz answers by letter.
+  async press_button(a) {
+    const el = vaFindButton(a.label);
+    if (!el) throw new Error(`I can't see a “${a.label}” button.`);
+    const text = vaButtonText(el) || a.label;
+    if (VA_RISKY.test(text) && !a.confirmed) {
+      va.pending = { action: { name: "press_button", args: { ...a, confirmed: true }, label: `Press “${text}”` }, rest: [], opts: va.lastOpts };
+      $("#vaConfirmText").textContent = `Press “${text}”?`;
+      $("#vaConfirm").hidden = false;
+      return `Press ${text}? Say yes or tap Confirm.`;
+    }
+    el.click();
+  },
+  async choose_answer(a) {
+    const root = vaTopDialog() || document;
+    const visible = (el) => el.offsetParent !== null && !el.disabled;
+    const opt = [...root.querySelectorAll(".learn-opt")].find((b) => visible(b) && (b.querySelector(".lo-key")?.textContent || "").trim() === a.choice)
+      || [...root.querySelectorAll(`[data-course-answer][data-key="${a.choice}"]`)].find(visible);
+    if (!opt) throw new Error("There's no answer to pick on screen right now.");
+    opt.click();
+  },
+  // Dev: the stock simulator
+  async open_simulator() { openSimulator(); },
+  async simulator_action(a) {
+    if (!$("#simDialog").open) openSimulator();
+    if (a.shares) $("#simQty").value = Math.round(a.shares);
+    const map = {
+      start: () => simStart(), buy: () => simStep("buy", 0), sell: () => simStep("sell", 0),
+      next_day: () => simStep("hold", 1), next_week: () => simStep("hold", 5),
+      end: () => simStep("hold", "end"), max: () => simMax(),
+    };
+    await map[a.action]();
+  },
+};
 
 /* ---------- Portfolio ---------- */
 async function loadPortfolio() {
@@ -4797,30 +5466,37 @@ function voiceSupported() {
 
 function setVoiceState(s, status) {
   voice.vstate = s;
-  const dlg = $("#voiceDialog");
-  dlg.classList.remove("listening", "thinking", "speaking");
-  if (s === "listening" || s === "thinking" || s === "speaking") dlg.classList.add(s);
+  const dock = $("#vaDock");
+  if (dock) {
+    dock.classList.remove("listening", "thinking", "speaking");
+    if (s === "listening" || s === "thinking" || s === "speaking") dock.classList.add(s);
+  }
   const map = {
-    idle: "Tap the mic and start talking",
+    idle: "Tap the mic and say what you want",
     listening: "Listening… tap to stop",
-    transcribing: "Transcribing…",
-    thinking: "FAAM is thinking…",
+    transcribing: "Got it…",
+    thinking: "Working on it…",
     speaking: "Speaking…",
   };
-  $("#voiceStatus").textContent = status || map[s] || "";
+  const el = $("#vaStatus");
+  if (el) el.textContent = status || map[s] || "";
+  // Tuck the agent down to its mic once it's done, so it never sits on top of
+  // a button; it opens back up the moment it's listening or working.
+  if (dock) {
+    clearTimeout(va.minTimer);
+    if (s === "idle" && $("#vaSay") && $("#vaSay").textContent) {
+      va.minTimer = setTimeout(() => {
+        if (!va.pending && !dock.contains(document.activeElement) && voice.vstate === "idle") dock.classList.add("min");
+      }, 7000);
+    } else if (s !== "idle") {
+      dock.classList.remove("min");
+    }
+  }
   const vb = $("#voiceBtn");
   if (vb) vb.classList.toggle("recording", s === "listening");
 }
 
-function openVoice() {
-  if (!voiceSupported()) { toast("Voice needs mic access in a supported browser (Chrome/Safari)."); return; }
-  $("#voiceYou").textContent = "";
-  $("#voiceAI").textContent = "";
-  setVoiceState("idle");
-  const dlg = $("#voiceDialog");
-  if (!dlg.open) dlg.showModal();
-  startListening();
-}
+function openVoice() { vaOpen(true); }
 
 function pickMime() {
   const cands = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
@@ -4878,13 +5554,7 @@ async function onListenStop() {
     if (data.error) throw new Error(data.error);
     const text = (data.text || "").trim();
     if (!text) { setVoiceState("idle", "Didn't catch that — tap to retry."); return; }
-    $("#voiceYou").textContent = text;
-    setVoiceState("thinking");
-    const reply = await voiceChat(text);
-    $("#voiceAI").textContent = reply;
-    setVoiceState("speaking");
-    await speak(reply);
-    setVoiceState("idle", "Tap the mic to talk again");
+    await vaHandle(text, { spoken: true });
   } catch (e) {
     setVoiceState("idle", "Voice error — tap to retry");
     toast("Voice: " + e.message);
@@ -4931,14 +5601,7 @@ function stopSpeaking() {
   if (voice.audio) { try { voice.audio.pause(); } catch (e) {} voice.audio = null; }
 }
 
-function closeVoice() {
-  stopListening();
-  releaseMic();
-  stopSpeaking();
-  setVoiceState("idle");
-  const dlg = $("#voiceDialog");
-  if (dlg.open) dlg.close();
-}
+function closeVoice() { vaClose(); }
 
 function toggleListen() {
   if (voice.vstate === "listening") stopListening();
@@ -5833,7 +6496,7 @@ function wire() {
   $("#closeSB").addEventListener("click", () => $("#sbDialog").close());
   $("#sbForm").addEventListener("submit", (ev) => { ev.preventDefault(); sbSearch($("#sbInput").value); });
   $("#sbSource").addEventListener("change", () => sbStore("faam-sb-source", $("#sbSource").value));
-  document.querySelectorAll(".sb-look button").forEach((b) => b.addEventListener("click", () => sbSetLook(b.dataset.look)));
+  $("#sbModel").addEventListener("change", () => { sbStore("faam-sb-model", $("#sbModel").value); sbModelChanged(); });
   $("#sbBackBtn").addEventListener("click", () => {
     if (sbState.idx < 0) return;
     sbState.idx -= 1;
@@ -6158,13 +6821,29 @@ function wire() {
   });
 
   // Voice mode (Pro+)
-  $("#voiceBtn").addEventListener("click", () => { if (gate("voice")) openVoice(); });
-  $("#voiceOrb").addEventListener("click", toggleListen);
-  $("#voiceOrb").addEventListener("keydown", (e) => {
-    if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleListen(); }
+  $("#voiceBtn").addEventListener("click", () => {
+    if ($("#vaDock").hidden) vaOpen(true);
+    else toggleListen();
   });
-  $("#voiceClose").addEventListener("click", closeVoice);
-  $("#voiceDialog").addEventListener("cancel", (e) => { e.preventDefault(); closeVoice(); });
+  $("#vaOrb").addEventListener("click", () => {
+    if (!voiceSupported()) { toast("Voice needs mic access in a supported browser — you can type commands instead."); $("#vaInput").focus(); return; }
+    toggleListen();
+  });
+  $("#vaClose").addEventListener("click", vaClose);
+  $("#vaMin").addEventListener("click", () => {
+    const min = $("#vaDock").classList.toggle("min");
+    $("#vaMin").setAttribute("aria-label", min ? "Expand the voice agent" : "Minimize the voice agent");
+    $("#vaMin").title = min ? "Expand" : "Minimize";
+  });
+  $("#vaYes").addEventListener("click", () => vaConfirm(true));
+  $("#vaNo").addEventListener("click", () => vaConfirm(false));
+  $("#vaForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const t = $("#vaInput").value.trim();
+    if (!t) return;
+    $("#vaInput").value = "";
+    vaHandle(t, { spoken: false });
+  });
 
   // "Open in browser" — only meaningful inside the native app; in a plain
   // browser you're already there, so keep it hidden.
@@ -6217,13 +6896,14 @@ function updateMarketClock() {
 window.addEventListener("DOMContentLoaded", () => {
   try {
     const sm = localStorage.getItem("faam-forecast-model");
-    if (sm === "apollo" || sm === "artemis" || sm === "perseverance") state.forecastModel = sm;
+    if (sm === "apollo" || sm === "artemis" || sm === "perseverance" || sm === "juno") state.forecastModel = sm;
     state.predictionMarkets = localStorage.getItem("faam-pred-markets") === "1";
     state.beginner = localStorage.getItem("faam-beginner") === "1";
     state.aiControl = localStorage.getItem("faam-ai-control") === "1";
   } catch (e) {}
   initBoot();
   loadPaperTeaser();                                 // Stock Paper promo on the splash
+  loadJunoStatus();                                  // Llama X JUNO, if it's on this Mac
   loadNotifications();                               // bell badge, then every minute
   setInterval(() => loadNotifications(true), 60_000);
   initVersion();

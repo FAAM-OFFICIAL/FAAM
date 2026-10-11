@@ -280,6 +280,7 @@
             </div>
           </div>
           <div class="fc-stats" id="fcStats"></div>
+          <div class="juno-panel" id="junoPanel" hidden></div>
           <div class="news-panel" id="newsPanel" hidden></div>
           <div class="markets-panel" id="marketsPanel" hidden></div>
           <p class="fc-disclaimer">
@@ -361,7 +362,7 @@
     <form class="chatbar" id="chatForm" autocomplete="off">
       <span class="chat-pre">Ask FAAM</span>
       <input id="chatInput" type="text" placeholder="What's the outlook on this stock?" />
-      <button type="button" id="voiceBtn" class="voice-btn" aria-label="Voice mode" title="Voice mode — talk to FAAM">
+      <button type="button" id="voiceBtn" class="voice-btn" aria-label="FAAM agent voice" title="FAAM agent voice — run FAAM by talking">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
       </button>
       <button type="submit" id="sendBtn" aria-label="Send">
@@ -1149,25 +1150,44 @@
   </dialog>
 
   <!-- Voice mode overlay -->
-  <dialog id="voiceDialog" class="voice-dialog">
-    <button class="iconbtn voice-close" id="voiceClose" aria-label="Close voice mode">
-      <svg viewBox="0 0 24 24" width="16" height="16"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+  <!-- FAAM AI agent voice: a dock that follows whatever screen is on top -->
+  <div class="va-dock" id="vaDock" role="region" aria-label="FAAM voice agent" hidden>
+    <button type="button" class="va-orb" id="vaOrb" aria-label="Talk to FAAM">
+      <span class="va-rings"><i></i><i></i></span>
+      <svg class="va-mic" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+      <span class="va-eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
     </button>
-    <div class="voice-orb" id="voiceOrb" role="button" tabindex="0" aria-label="Start or stop listening">
-      <span class="voice-rings"><i></i><i></i><i></i></span>
-      <svg class="voice-mic" viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
-      <span class="voice-eq"><i></i><i></i><i></i><i></i><i></i></span>
+    <div class="va-main">
+      <div class="va-top">
+        <span class="va-badge">FAAM AGENT</span>
+        <span class="va-status" id="vaStatus">Tap the mic and say what you want</span>
+      </div>
+      <p class="va-heard" id="vaHeard"></p>
+      <p class="va-say" id="vaSay" aria-live="polite"></p>
+      <div class="va-examples" id="vaExamples"></div>
+      <div class="va-confirm" id="vaConfirm" hidden>
+        <span id="vaConfirmText"></span>
+        <button type="button" class="va-yes" id="vaYes">Confirm</button>
+        <button type="button" class="va-no" id="vaNo">Cancel</button>
+      </div>
+      <ul class="va-done" id="vaDone"></ul>
+      <form class="va-type" id="vaForm" autocomplete="off">
+        <input id="vaInput" maxlength="600" placeholder="Or type a command…" aria-label="Type a command" />
+        <button type="submit" aria-label="Run command">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+      </form>
     </div>
-    <div class="voice-status" id="voiceStatus">Tap the mic and start talking</div>
-    <div class="voice-transcript">
-      <p class="vt-you" id="voiceYou"></p>
-      <p class="vt-ai" id="voiceAI"></p>
-    </div>
-    <div class="voice-hint muted small">Speaks back using FAAM's voice. Esc to close.</div>
-  </dialog>
+    <button type="button" class="va-min" id="vaMin" aria-label="Minimize the voice agent" title="Minimize">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <button type="button" class="va-x" id="vaClose" aria-label="Close the voice agent" title="Close">
+      <svg viewBox="0 0 24 24" width="14" height="14"><path stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
 
   <!-- Stocks Browser: AI web research without leaving FAAM -->
-  <dialog id="sbDialog" class="sb-fs" data-look="faam" aria-label="Stocks Browser">
+  <dialog id="sbDialog" class="sb-fs" aria-label="Stocks Browser">
     <div class="sb-chrome">
       <div class="sb-nav">
         <button type="button" class="sb-navbtn" id="sbBackBtn" aria-label="Back" title="Back" disabled>
@@ -1183,24 +1203,23 @@
       <form class="sb-omni" id="sbForm" role="search" autocomplete="off">
         <svg class="sb-omni-ico" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
         <input id="sbInput" type="search" maxlength="300" placeholder="Search stocks, companies, or ask anything" aria-label="Search" />
-        <select id="sbSource" aria-label="Search in"></select>
         <button type="submit" class="sb-go">Search</button>
       </form>
-      <div class="sb-look" role="radiogroup" aria-label="Page look">
-        <button type="button" role="radio" data-look="faam" aria-checked="true">FAAM</button>
-        <button type="button" role="radio" data-look="portal" aria-checked="false" title="A finance-portal look">Portal</button>
-        <button type="button" role="radio" data-look="broadsheet" aria-checked="false" title="A newspaper look">Broadsheet</button>
-      </div>
       <button class="learn-fs-x" id="closeSB" aria-label="Close the Stocks Browser" title="Close">
         <svg viewBox="0 0 24 24" width="20" height="20"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
+    </div>
+    <div class="sb-tools">
+      <label class="sb-pick"><span>Answer with</span><select id="sbModel" aria-label="Answer with"></select></label>
+      <label class="sb-pick" id="sbSourcePick"><span>Search in</span><select id="sbSource" aria-label="Search in"></select></label>
+      <span class="sb-model-hint" id="sbModelHint"></span>
     </div>
     <div class="sb-body" id="sbBody">
       <!-- Home -->
       <section class="sb-home" id="sbHome">
         <p class="sb-home-kicker">FAAM</p>
         <h1 class="sb-home-title">Stocks Browser</h1>
-        <p class="sb-home-sub">Ask anything about stocks. FAAM AI searches the web and brings back a short brief with its sources, so you don't have to leave the app.</p>
+        <p class="sb-home-sub">Ask anything about stocks without leaving the app. FAAM picks the best AI for the question: a live web search for news, Llama X JUNO for forecasts (in heavy testing), or Titan for the basics. Or choose one yourself.</p>
         <div class="sb-chips" id="sbSuggest"></div>
         <div class="sb-recent" id="sbRecentWrap" hidden>
           <div class="sb-recent-h"><span>Recent searches</span><button type="button" id="sbRecentClear">Clear</button></div>
@@ -1229,9 +1248,11 @@
         <div class="sb-main">
           <p class="sb-kicker" id="sbKicker"></p>
           <h1 class="sb-q" id="sbTitle"></h1>
+          <p class="sb-answered" id="sbAnswered"></p>
           <article class="sb-brief" id="sbBrief"></article>
+          <div class="sb-juno" id="sbJuno" hidden></div>
           <p class="sb-note" id="sbNote">Written by FAAM AI from the sources below. Information, not financial advice.</p>
-          <h3 class="sb-h">Sources</h3>
+          <h3 class="sb-h" id="sbSourcesH">Sources</h3>
           <ol class="sb-sources" id="sbSources"></ol>
           <div id="sbMoreWrap" hidden>
             <h3 class="sb-h">Other pages the search looked at</h3>

@@ -179,6 +179,9 @@ class TestSearch(Case):
             self.calls.append({"instructions": instructions, "prompt": prompt, "domains": domains})
             return sample()
         self.m._sb_responses = fake
+        self.m.titan_recall = lambda q: None          # keep Titan offline in tests
+        self.m.titan_generate = lambda q: ""
+        self.m.juno_status = lambda: {"installed": False, "running": False}
 
     def test_a_search(self):
         r = self.m.stocks_browser_search("alice", "why is nvda up", "web")
@@ -250,6 +253,117 @@ class TestSearch(Case):
     def test_no_quote_when_nothing_resolves(self):
         self.m._sb_responses = lambda *a: ai_result("Rates explained.\nTICKERS: NONE")
         self.assertIsNone(self.m.stocks_browser_search("alice", "what are rates")["quote"])
+
+
+class TestModelRouting(Case):
+    """The browser's "Auto" picks the best model for the question."""
+
+    def setUp(self):
+        super().setUp()
+        self.m.OPENAI_API_KEY = "test-key"
+        self.calls = []
+        self.m._sb_responses = lambda *a: (self.calls.append(a), sample())[1]
+        self.m.titan_recall = lambda q: None
+        self.m.titan_generate = lambda q: ""
+        self.juno = False
+        self.m.juno_status = lambda: {"installed": self.juno, "running": self.juno}
+
+    def pick(self, q, choice="auto"):
+        return self.m.sb_pick_model(q, choice)[0]
+
+    def test_tickers_from_names_and_symbols(self):
+        self.assertEqual(self.m.sb_resolve_ticker("where is nvidia headed"), "NVDA")
+        self.assertEqual(self.m.sb_resolve_ticker("thoughts on $amd"), "AMD")
+        self.assertEqual(self.m.sb_resolve_ticker("is the S&P 500 going up"), "SPY")
+        self.assertEqual(self.m.sb_resolve_ticker("explain what an etf is"), "")
+        self.assertEqual(self.m.sb_resolve_ticker("metaverse hype"), "", "whole words only")
+
+    def test_horizons(self):
+        self.assertEqual(self.m.sb_horizon("next week"), 7)
+        self.assertEqual(self.m.sb_horizon("over the next quarter"), 90)
+        self.assertEqual(self.m.sb_horizon("next month"), 30)
+
+    def test_auto_with_juno(self):
+        self.juno = True
+        self.assertEqual(self.pick("Where is Nvidia headed next month?"), "juno")
+        self.assertEqual(self.pick("What's Apple's outlook?"), "juno")
+        self.assertEqual(self.pick("What is a P/E ratio?"), "juno")
+        self.assertEqual(self.pick("Why is Nvidia down today?"), "web")
+        self.assertEqual(self.pick("Latest news on the Fed"), "web")
+        self.assertEqual(self.pick("Tesla earnings"), "web")
+
+    def test_auto_without_juno(self):
+        self.assertEqual(self.pick("What is a P/E ratio?"), "titan")
+        model, why = self.m.sb_pick_model("Where is Nvidia headed next month?", "auto")
+        self.assertEqual(model, "web")
+        self.assertIn("in heavy testing", why)
+
+    def test_your_pick_wins(self):
+        self.juno = True
+        self.assertEqual(self.pick("Why is Nvidia down today?", "juno"), "juno")
+        self.assertEqual(self.pick("Where is Nvidia headed?", "web"), "web")
+        self.assertEqual(self.pick("What is a P/E ratio?", "titan"), "titan")
+        self.juno = False
+        self.assertEqual(self.pick("anything", "juno"), "web", "JUNO missing falls back")
+
+    def test_page_summaries_always_use_the_web(self):
+        self.juno = True
+        self.assertEqual(self.m.sb_pick_model("x", "juno", page="https://x.com/a")[0], "web")
+
+    def test_juno_forecast_answer(self):
+        self.juno = True
+        bands = [{"band": b, "name": n, "p": p, "lo": lo, "hi": hi} for b, n, p, lo, hi in [
+            ("A", "Strong down", .05, None, -8.0), ("B", "Down", .15, -8.0, -2.0), ("C", "Flat", .2, -2.0, 2.0),
+            ("D", "Up", .4, 2.0, 8.0), ("E", "Strong up", .2, 8.0, None)]]
+        seen = []
+        self.m.juno_forecast = lambda sym, h: (seen.append((sym, h)), {
+            "symbol": sym, "name": "NVIDIA Corporation", "price": 100.0,
+            "juno": {"days": 21, "bands": bands, "probUp": .6, "probDown": .2, "expReturnPct": 2.4}})[1]
+        r = self.m.stocks_browser_search("alice", "where is nvidia headed next month", model="auto")
+        self.assertEqual(seen, [("NVDA", 30)])
+        self.assertEqual(r["model"], {"id": "juno", "name": "Llama X JUNO", "builtWith": "Built with Llama"})
+        self.assertIn("60% chance it ends higher", r["paragraphs"][0])
+        self.assertIn("“Up” (+2.0% to +8.0%) at 40%", r["paragraphs"][1])
+        self.assertEqual(len(r["junoBands"]), 5)
+        self.assertEqual(r["quote"]["symbol"], "NVDA")
+        self.assertEqual(self.calls, [], "no web search, no cost")
+
+    def test_juno_explains_concepts(self):
+        self.juno = True
+        self.m.juno_start = lambda wait=120.0: True
+        self.m._juno_call = lambda method, path, body=None, timeout=60.0: {
+            "text": "An ETF is a basket of investments.\n\nIt trades like a single stock."}
+        r = self.m.stocks_browser_search("alice", "What is an ETF?", model="auto")
+        self.assertEqual(r["model"]["id"], "juno")
+        self.assertEqual(r["paragraphs"], ["An ETF is a basket of investments.", "It trades like a single stock."])
+        self.assertIsNone(r["quote"])
+
+    def test_juno_failure_falls_back_to_the_web(self):
+        self.juno = True
+        self.m.juno_forecast = lambda sym, h: {"error": "asleep"}
+        r = self.m.stocks_browser_search("alice", "where is nvidia headed next month", model="juno")
+        self.assertEqual(r["model"]["id"], "web")
+        self.assertIn("couldn't answer", r["modelReason"])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_titan_answers_from_memory(self):
+        self.m.titan_recall = lambda q: {"answer": "A dividend is a cash payment to shareholders.",
+                                         "score": 1, "matched": q}
+        r = self.m.stocks_browser_search("alice", "What is a dividend?", model="auto")
+        self.assertEqual((r["model"]["id"], r["paragraphs"]),
+                         ("titan", ["A dividend is a cash payment to shareholders."]))
+        self.assertEqual(self.calls, [])
+
+    def test_titan_unknown_falls_back(self):
+        r = self.m.stocks_browser_search("alice", "What is a dividend?", model="titan")
+        self.assertEqual(r["model"]["id"], "web")
+        self.assertIn("didn't know", r["modelReason"])
+
+    def test_models_listed_with_readiness(self):
+        self.m.OPENAI_API_KEY = ""
+        listed = {m["id"]: m["ready"] for m in [
+            {"id": k, "ready": k != "juno" or self.m.juno_status()["installed"]} for k in self.m.SB_MODELS]}
+        self.assertEqual(listed, {"auto": True, "web": True, "juno": False, "titan": True})
 
 
 class TestAlerts(Case):

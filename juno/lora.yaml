@@ -1,0 +1,26 @@
+# Llama X JUNO — LoRA fine-tuning settings for mlx-lm (paths come from train.sh).
+# Sized for an M4 with 24 GB. The first try used learning_rate 1e-4 with scale 20,
+# 10x mlx-lm's default update size, and diverged around step 40 (loss 0.5 -> 8).
+# These keep the update size at mlx-lm's default and warm up gently.
+fine_tune_type: lora
+num_layers: 8
+batch_size: 2
+iters: 600
+learning_rate: 2.0e-5
+lr_schedule:
+  name: cosine_decay
+  warmup: 40
+  warmup_init: 1.0e-7
+  arguments: [2.0e-5, 600, 2.0e-6]
+lora_parameters:
+  rank: 8
+  scale: 10.0
+  dropout: 0.05
+mask_prompt: true
+max_seq_length: 512
+grad_checkpoint: true
+steps_per_report: 10
+steps_per_eval: 300
+val_batches: 10
+save_every: 100
+seed: 7

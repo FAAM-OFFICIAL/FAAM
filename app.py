@@ -7,6 +7,7 @@ Single-file backend, stdlib only. Serves static UI + proxies stock data
 
 from __future__ import annotations
 
+import atexit
 import base64
 import concurrent.futures
 import errno
@@ -74,6 +75,14 @@ MAX_AUDIO_BYTES = 26 * 1024 * 1024        # voice uploads (OpenAI caps audio ~25
 # What's-new feed: shown in-app, and the top version drives the "new" badge.
 # Add a new entry at the top each release; tags: "new" | "improved" | "fixed".
 CHANGELOG = [
+    {"version": "1.11", "date": "2026-10-11", "title": "Agent voice & JUNO × FAAM", "items": [
+        {"tag": "new", "text": "JUNO × FAAM — Llama X JUNO, FAAM's own stock model, is here and still in heavy testing. It's Meta's Llama 3.1, trained by FAAM on 10 years of stock data. It switches on in Forecasts and the Stocks Browser once it passes FAAM's accuracy tests; until then it's marked In heavy testing. Built with Llama."},
+        {"tag": "new", "text": "FAAM agent voice — tap the mic and run FAAM by talking: open stocks, change the chart, set alerts, search the web, fill an order ticket, or open any screen. It reads live prices and answers out loud."},
+        {"tag": "new", "text": "Prefer typing? The agent takes typed commands too. Anything that deletes something or signs you out asks first, and FAAM still never places trades."},
+        {"tag": "improved", "text": "Voice mode is now the agent, and it stays with you on every screen. Minimize it to a small mic any time."},
+        {"tag": "new", "text": "Stocks Browser: choose which AI answers, or leave it on Auto and FAAM picks the best one for your question: a live web search for news, forecasts from Llama X JUNO, or Titan for the basics."},
+        {"tag": "improved", "text": "The Stocks Browser has one clean look, with a dark version for dark mode."},
+    ]},
     {"version": "1.10", "date": "2026-10-10", "title": "Stocks Browser & price alerts", "items": [
         {"tag": "new", "text": "Stocks Browser — ask anything and FAAM AI searches the web, then writes a short brief with its sources. Search everything or just Yahoo Finance, WSJ, Reuters, CNBC or SEC filings, and switch between the FAAM, Portal and Broadsheet looks."},
         {"tag": "new", "text": "Summarize any article right inside FAAM — no need to leave the app."},
@@ -129,9 +138,8 @@ CHANGELOG = [
     ]},
 ]
 ROADMAP = [
-    {"title": "AI agent voice", "text": "Control FAAM by talking — open stocks, set alerts and run searches just by asking."},
     {"title": "Practice trading leagues", "text": "Compare your simulated portfolio with friends on a leaderboard."},
-    {"title": "Juno", "text": "A deep model trained on historical stock data — in training now."},
+    {"title": "Llama X JUNO", "text": "FAAM's own stock model, built with Llama and trained on 10 years of market data — in heavy testing now."},
     {"title": "FAAM in the cloud", "text": "Use FAAM in any browser with nothing to install."},
     {"title": "News alerts", "text": "Get pinged when the story changes on the stocks you follow."},
     {"title": "Mobile apps", "text": "FAAM for iOS and Android."},
@@ -1133,11 +1141,144 @@ FORECAST_MODELS = [
     {"id": "apollo",  "name": "Apollo",  "kind": "Drift & volatility engine",        "live": True},
     {"id": "artemis", "name": "Artemis", "kind": "Simulation + live news sentiment", "live": True},
     {"id": "perseverance", "name": "Perseverance", "kind": "Apollo + Artemis ensemble", "live": True, "minTier": 4},
-    # Coming soon — a deep network trained on historical stock data. Not live yet,
-    # so compute_forecast() falls back to Apollo if it's ever requested.
-    {"id": "juno", "name": "Juno", "kind": "Deep model trained on historical stock data", "live": False, "comingSoon": True},
+    # Llama X JUNO — Llama 3.1 fine-tuned on 10 years of stock data. Switched on
+    # by forecast_models_public() wherever it's installed (see juno/README.md).
+    {"id": "juno", "name": "Llama X JUNO", "kind": "Built with Llama · trained on 10 years of stock data",
+     "live": False, "comingSoon": True, "testing": True},
 ]
 _MODEL_BY_ID = {m["id"]: m for m in FORECAST_MODELS}
+
+# ---------- Llama X JUNO: FAAM's own stock model (Built with Llama) ----------
+# Meta's Llama 3.1 8B Instruct, fine-tuned (LoRA) on years of daily stock data so
+# it reads a stock's recent behaviour and sizes up the next few weeks. Meta's
+# license requires the name to start with "Llama" and FAAM to show "Built with
+# Llama" wherever JUNO is used. Training lives in juno/ (see juno/README.md);
+# the model runs on this Mac as a small local server that FAAM calls.
+#
+# JUNO is in heavy testing: it switches on only where it's installed, and FAAM
+# labels it "In heavy testing" everywhere it appears until it beats the simple
+# baselines in juno/evaluate.py.
+#
+# The prompt deliberately carries no ticker and no date: Llama already knows how
+# famous stocks did before 2024, and a prompt that names them would let it
+# "remember" outcomes instead of learning from the numbers.
+JUNO_NAME = "Llama X JUNO"
+JUNO_BASE = "Llama 3.1 8B Instruct"
+JUNO_URL = (os.environ.get("FAAM_JUNO_URL") or "http://127.0.0.1:8899").rstrip("/")
+JUNO_TRADING_DAYS = (5, 21, 63)          # horizons JUNO was trained on (~1w, 1m, 3m)
+JUNO_BANDS = ("A", "B", "C", "D", "E")
+JUNO_BAND_NAMES = {"A": "Strong down", "B": "Down", "C": "Flat", "D": "Up", "E": "Strong up"}
+JUNO_BAND_CUTS = (-1.0, -0.25, 0.25, 1.0)       # in units of the stock's own typical move
+JUNO_BAND_MEAN_Z = {"A": -1.6, "B": -0.6, "C": 0.0, "D": 0.6, "E": 1.6}  # replaced by training stats
+JUNO_SYSTEM = (
+    "You are Llama X JUNO, FAAM's stock model. You read a stock's recent price behaviour and "
+    "the market backdrop and classify how it is likely to move over the stated horizon, "
+    "relative to its own typical volatility. Reply with JSON only: {\"band\": \"A\"|\"B\"|\"C\"|\"D\"|\"E\"}."
+)
+
+
+def _pct(a, b):
+    return (a / b - 1.0) * 100.0 if a and b else 0.0
+
+
+def juno_features(closes: list, volumes: list | None = None, market: list | None = None) -> dict | None:
+    """Signals JUNO reads, from daily closes (oldest first, at least ~130 bars).
+    `market` is the S&P 500 (SPY) closes ending on the same day."""
+    c = [float(x) for x in closes if x]
+    if len(c) < 130:
+        return None
+    last = c[-1]
+    lr = [math.log(c[i] / c[i - 1]) for i in range(1, len(c)) if c[i - 1] > 0]
+
+    def ret(n):
+        return _pct(last, c[-1 - n]) if len(c) > n else None
+
+    def vol(n):
+        xs = lr[-n:]
+        if len(xs) < 2:
+            return 0.0
+        m = sum(xs) / len(xs)
+        return math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1))
+
+    def sma(n):
+        xs = c[-n:]
+        return sum(xs) / len(xs) if len(xs) == n else None
+
+    gains = [max(0.0, c[i] - c[i - 1]) for i in range(len(c) - 14, len(c))]
+    losses = [max(0.0, c[i - 1] - c[i]) for i in range(len(c) - 14, len(c))]
+    ag, al = sum(gains) / 14, sum(losses) / 14
+    rsi = 100.0 - 100.0 / (1.0 + ag / al) if al else 100.0
+    year = c[-252:]
+    peak, dd = c[-60], 0.0
+    for x in c[-60:]:
+        peak = max(peak, x)
+        dd = min(dd, _pct(x, peak))
+    _, _, r2 = _linreg(c[-60:])
+    f = {
+        "r1": ret(1), "r5": ret(5), "r21": ret(21), "r63": ret(63), "r126": ret(126), "r252": ret(252),
+        "v20": vol(20) * math.sqrt(252) * 100, "v60": vol(60) * math.sqrt(252) * 100,
+        "s20": _pct(last, sma(20)), "s50": _pct(last, sma(50)),
+        "s200": _pct(last, sma(200)) if sma(200) else None,
+        "rsi": rsi, "fromHigh": _pct(last, max(year)), "fromLow": _pct(last, min(year)),
+        "dd60": dd, "r2": r2, "sigma": vol(60),
+    }
+    v = [float(x) for x in (volumes or []) if x]
+    if len(v) >= 60 and sum(v[-60:]):
+        f["volRatio"] = (sum(v[-5:]) / 5) / (sum(v[-60:]) / 60)
+    m = [float(x) for x in (market or []) if x]
+    if len(m) >= 64:
+        mlr = [math.log(m[i] / m[i - 1]) for i in range(len(m) - 20, len(m)) if m[i - 1] > 0]
+        mm = sum(mlr) / len(mlr)
+        f["m21"] = _pct(m[-1], m[-22])
+        f["m63"] = _pct(m[-1], m[-64])
+        f["mv20"] = math.sqrt(sum((x - mm) ** 2 for x in mlr) / (len(mlr) - 1)) * math.sqrt(252) * 100
+    return {k: (round(x, 4) if isinstance(x, float) else x) for k, x in f.items()}
+
+
+def juno_band_edges(sigma: float, days: int) -> list:
+    """The four % cut points between bands A|B|C|D|E for this stock and horizon."""
+    move = (math.exp(sigma * math.sqrt(days)) - 1.0) * 100.0
+    return [round(z * move, 2) for z in JUNO_BAND_CUTS]
+
+
+def juno_band(ret_pct: float, sigma: float, days: int) -> str:
+    edges = juno_band_edges(sigma, days)
+    for letter, edge in zip(JUNO_BANDS, edges):
+        if ret_pct < edge:
+            return letter
+    return "E"
+
+
+def juno_prompt(f: dict, days: int) -> str:
+    def p(x, d=1):
+        return "n/a" if x is None else f"{x:+.{d}f}%"
+    e = juno_band_edges(f["sigma"], days)
+    lines = [
+        f"Horizon: the next {days} trading days.",
+        f"Returns: 1d {p(f['r1'])} | 1w {p(f['r5'])} | 1m {p(f['r21'])} | 3m {p(f['r63'])} | "
+        f"6m {p(f['r126'])} | 1y {p(f['r252'], 0)}",
+        f"Volatility (annualized): 20d {f['v20']:.0f}% | 60d {f['v60']:.0f}%",
+        f"Trend: vs 20-day avg {p(f['s20'])} | vs 50-day {p(f['s50'])} | vs 200-day {p(f['s200'])} | "
+        f"60-day trend fit R² {f['r2']:.2f}",
+        f"Range: {p(f['fromHigh'])} from 52-week high | {p(f['fromLow'], 0)} from 52-week low | "
+        f"60-day max drawdown {f['dd60']:.1f}%",
+        f"Momentum: RSI(14) {f['rsi']:.0f}"
+        + (f" | volume 5d vs 60d avg {f['volRatio']:.2f}x" if f.get("volRatio") else ""),
+    ]
+    if f.get("m21") is not None:
+        lines.append(f"Market (S&P 500): 1m {p(f['m21'])} | 3m {p(f['m63'])} | 20d volatility {f['mv20']:.0f}%")
+    lines.append(f"Bands: A below {e[0]:+.1f}% | B {e[0]:+.1f}% to {e[1]:+.1f}% | C {e[1]:+.1f}% to "
+                 f"{e[2]:+.1f}% | D {e[2]:+.1f}% to {e[3]:+.1f}% | E above {e[3]:+.1f}%")
+    lines.append("Which band will the stock's return fall in?")
+    return "\n".join(lines)
+
+
+def juno_expected_return(probs: dict, sigma: float, days: int, band_mean_z: dict | None = None) -> float:
+    """Probability-weighted expected % return over `days`."""
+    mz = band_mean_z or JUNO_BAND_MEAN_Z
+    move = sigma * math.sqrt(days)
+    z = sum(float(probs.get(b, 0)) * mz[b] for b in JUNO_BANDS)
+    return (math.exp(z * move) - 1.0) * 100.0
 
 
 def _norm_cdf(z: float) -> float:
@@ -1238,6 +1379,8 @@ def compute_forecast(symbol: str, horizon: int = 30, model: str = "apollo",
     from live headline sentiment). Both return 68% / 90% bands plus a linear-trend
     line, a history tail, and summary stats.
     """
+    if model == "juno":
+        return juno_forecast(symbol, horizon)
     spec = _MODEL_BY_ID.get(model)
     if not spec or not spec.get("live"):
         model, spec = "apollo", _MODEL_BY_ID["apollo"]
@@ -1319,7 +1462,163 @@ def compute_forecast(symbol: str, horizon: int = 30, model: str = "apollo",
         },
         "probabilities": _model_probabilities(s0, mu_eff, sigma, horizon),
         "model": spec,
-        "models": FORECAST_MODELS,
+        "models": forecast_models_public(),
+    }
+
+
+# ---- Running JUNO from FAAM. JUNO lives in ~/.faam/juno (its own Python with
+# Apple's MLX, the Llama weights in the model cache, and JUNO's trained adapter);
+# FAAM starts its local server the first time a JUNO forecast is asked for and
+# stops it when FAAM quits. On a host without JUNO, it stays "in heavy testing".
+JUNO_HOME = Path(os.environ.get("JUNO_HOME") or (Path.home() / ".faam" / "juno"))
+_JUNO_LOCK = threading.Lock()
+_JUNO = {"proc": None, "health": None, "checked": 0.0}
+
+
+def _juno_call(method: str, path: str, body=None, timeout: float = 60.0) -> dict:
+    req = urllib.request.Request(
+        JUNO_URL + path, method=method, headers={"Content-Type": "application/json"},
+        data=json.dumps(body).encode("utf-8") if body is not None else None)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)[:200]}
+
+
+def juno_installed() -> bool:
+    """Ready to use: trained, evaluated and installed (install.sh writes the
+    marker). Checkpoints saved mid-training don't count, so FAAM never loads a
+    second copy of the model while it's still training."""
+    return all((JUNO_HOME / p).exists() for p in
+               ("venv/bin/python", "app/serve.py", "app/runtime.py", "adapters/adapters.safetensors",
+                "installed.json"))
+
+
+def juno_health(max_age: float = 15.0):
+    now = time.time()
+    if now - _JUNO["checked"] < max_age:
+        return _JUNO["health"]
+    h = _juno_call("GET", "/health", timeout=0.8)
+    _JUNO["health"] = None if h.get("error") else h
+    _JUNO["checked"] = now
+    return _JUNO["health"]
+
+
+def _juno_stop() -> None:
+    p = _JUNO.get("proc")
+    if p and p.poll() is None:
+        p.terminate()
+
+
+def juno_start(wait: float = 120.0) -> bool:
+    """Make sure JUNO is answering; start it on this Mac if it isn't."""
+    if juno_health(max_age=5):
+        return True
+    local = urllib.parse.urlparse(JUNO_URL).hostname in ("127.0.0.1", "localhost")
+    if not (local and juno_installed()):
+        return False
+    with _JUNO_LOCK:
+        p = _JUNO.get("proc")
+        if not p or p.poll() is not None:
+            env = {**os.environ, "JUNO_HOME": str(JUNO_HOME),
+                   "JUNO_PORT": str(urllib.parse.urlparse(JUNO_URL).port or 8899)}
+            log = open(JUNO_HOME / "serve.log", "ab")
+            _JUNO["proc"] = subprocess.Popen(
+                [str(JUNO_HOME / "venv/bin/python"), str(JUNO_HOME / "app/serve.py")],
+                env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL)
+            atexit.register(_juno_stop)
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        if juno_health(max_age=0):
+            return True
+        if _JUNO["proc"].poll() is not None:
+            return False                       # it crashed; serve.log says why
+        time.sleep(1.0)
+    return False
+
+
+def juno_status() -> dict:
+    h = juno_health()
+    return {"name": JUNO_NAME, "base": JUNO_BASE, "builtWith": "Built with Llama", "testing": True,
+            "installed": juno_installed() or bool(h), "running": bool(h)}
+
+
+def forecast_models_public() -> list:
+    """The model list, with JUNO switched on wherever it's installed."""
+    ready = juno_status()["installed"]
+    out = []
+    for m in FORECAST_MODELS:
+        m = dict(m)
+        if m["id"] == "juno" and ready:
+            m.update(live=True, comingSoon=False)
+        out.append(m)
+    return out
+
+
+def juno_forecast(symbol: str, horizon: int = 30) -> dict:
+    horizon = max(5, min(int(horizon or 30), 120))
+    if not juno_start():
+        return {"error": f"{JUNO_NAME} is still in heavy testing and isn't switched on here yet.",
+                "juno": juno_status()}
+    q = yahoo_quote(symbol, range_="2y", interval="1d")
+    if q.get("error"):
+        return {"error": q["error"]}
+    hist = [p for p in q.get("history", []) if p.get("c")]
+    closes = [p["c"] for p in hist]
+    try:
+        spy = [p["c"] for p in yahoo_quote("SPY", range_="6mo", interval="1d").get("history", []) if p.get("c")]
+    except Exception:  # noqa: BLE001
+        spy = []
+    f = juno_features(closes, [p.get("v") or 0 for p in hist], spy)
+    if not f or f["sigma"] <= 0:
+        return {"error": f"{JUNO_NAME} needs about six months of price history for this symbol."}
+    days = min(JUNO_TRADING_DAYS, key=lambda d: abs(d - horizon))
+    res = _juno_call("POST", "/forecast", {"prompt": juno_prompt(f, days)}, timeout=90)
+    raw = res.get("probs") if isinstance(res.get("probs"), dict) else {}
+    try:
+        probs = {b: max(0.0, float(raw.get(b, 0))) for b in JUNO_BANDS}
+    except (TypeError, ValueError):
+        probs = {}
+    total = sum(probs.values())
+    if not probs or total <= 0:
+        return {"error": f"{JUNO_NAME} didn't answer. Try again in a moment."}
+    probs = {b: v / total for b, v in probs.items()}
+    mz = (juno_health() or {}).get("bandMeanZ") or JUNO_BAND_MEAN_Z
+    exp_days = juno_expected_return(probs, f["sigma"], days, mz)
+    mu, sigma = math.log(1 + exp_days / 100.0) / days, f["sigma"]
+
+    s0, last_t = closes[-1], hist[-1]["t"]
+    tail = closes[-min(120, len(closes)):]
+    slope, intercept, r2 = _linreg(tail)
+    base_idx = len(tail) - 1
+    fc = [{"t": last_t, "mean": round(s0, 4), "lo68": round(s0, 4), "hi68": round(s0, 4),
+           "lo90": round(s0, 4), "hi90": round(s0, 4), "trend": round(intercept + slope * base_idx, 4)}]
+    for k, pt in enumerate(_cone_gbm(s0, mu, sigma, _next_business_days(last_t, horizon)), start=1):
+        pt["trend"] = round(intercept + slope * (base_idx + k), 4)
+        fc.append(pt)
+    target = fc[-1]["mean"]
+    exp_ret = (target / s0 - 1.0) * 100.0
+    edges = juno_band_edges(sigma, days)
+    bands = [{"band": b, "name": JUNO_BAND_NAMES[b], "p": round(probs[b], 4),
+              "lo": edges[i - 1] if i else None, "hi": edges[i] if i < len(edges) else None}
+             for i, b in enumerate(JUNO_BANDS)]
+    p_up, p_down = probs["D"] + probs["E"], probs["A"] + probs["B"]
+    spec = next(m for m in forecast_models_public() if m["id"] == "juno")
+    return {
+        "symbol": q["symbol"], "name": q.get("name", symbol), "price": round(s0, 4),
+        "horizon": horizon, "anchorT": last_t,
+        "history": [{"t": p["t"], "c": p["c"]} for p in hist[-90:]],
+        "forecast": fc,
+        "stats": {"target": round(target, 4), "lo": round(fc[-1]["lo90"], 4), "hi": round(fc[-1]["hi90"], 4),
+                  "expReturnPct": round(exp_ret, 2), "annVolPct": round(sigma * math.sqrt(252) * 100, 1),
+                  "driftDailyPct": round((math.exp(mu) - 1.0) * 100.0, 3), "newsTiltPct": 0.0,
+                  "trendR2": round(r2, 2), "direction": "up" if exp_ret >= 0 else "down"},
+        "probabilities": _model_probabilities(s0, mu, sigma, horizon),
+        "juno": {"name": JUNO_NAME, "base": JUNO_BASE, "builtWith": "Built with Llama", "testing": True, "days": days,
+                 "bands": bands, "probUp": round(p_up, 4), "probDown": round(p_down, 4),
+                 "expReturnPct": round(exp_days, 2)},
+        "model": spec, "models": forecast_models_public(),
     }
 
 
@@ -4495,23 +4794,138 @@ def _sb_rate_ok(username: str) -> bool:
         return ok
 
 
-def stocks_browser_search(username: str, query, source="web", url="") -> dict:
-    """One Stocks Browser search (or, with url, a summary of one page)."""
-    query = " ".join(str(query or "").split())[:SB_QUERY_MAX]
-    source = source if source in SB_SOURCES else "web"
-    page = _sb_clean_url(url) if url else ""
-    if url and not page:
-        return {"error": "That link can't be opened here.", "status": 400}
-    if not page and len(query) < 2:
-        return {"error": "Type something to search for.", "status": 400}
+# Which AI answers. "auto" picks per question: forecasts go to Llama X JUNO,
+# investing concepts to JUNO (or Titan), anything current to the web search.
+SB_MODELS = {
+    "auto": {"name": "Auto", "desc": "Best model for the question"},
+    "web": {"name": "FAAM AI", "desc": "Searches the web: news, earnings, what's happening now"},
+    "juno": {"name": "Llama X JUNO", "desc": "Built with Llama: forecasts and explanations, runs on this Mac. In heavy testing"},
+    "titan": {"name": "Titan", "desc": "FAAM's built-in AI: quick answers to investing basics"},
+}
+_SB_NEWS = re.compile(
+    r"\b(today|tonight|yesterday|this (week|morning|afternoon)|latest|news|headlines?|why (is|are|did|was|were)|"
+    r"earnings|reported|announc\w*|the fed|interest rates?|deal|merger|lawsuit|ceo|guidance|right now|"
+    r"happening|recent(ly)?|this year)\b", re.I)
+_SB_FORECAST = re.compile(
+    r"\b(forecast\w*|predict\w*|outlook|headed|heading|where (is|will|are|does)\b|going to (go|be|rise|fall|drop)|"
+    r"next (week|month|quarter|few (weeks|months)|3 months|three months)|(go|going) (up|down)|"
+    r"will .{0,40}\b(rise|fall|drop|climb|go up|go down)\b|odds|chances?|probabilit\w*|price target)\b", re.I)
+_SB_CONCEPT = re.compile(
+    r"^\s*(what('s| is| are| does| do)|how (does|do|is|are|to)|explain|define|meaning of|difference between|"
+    r"why do(es)?)\b", re.I)
+SB_COMPANY_TICKERS = {
+    "apple": "AAPL", "microsoft": "MSFT", "nvidia": "NVDA", "amazon": "AMZN", "google": "GOOGL",
+    "alphabet": "GOOGL", "meta": "META", "facebook": "META", "tesla": "TSLA", "netflix": "NFLX",
+    "amd": "AMD", "intel": "INTC", "broadcom": "AVGO", "oracle": "ORCL", "salesforce": "CRM",
+    "adobe": "ADBE", "ibm": "IBM", "cisco": "CSCO", "qualcomm": "QCOM", "palantir": "PLTR",
+    "disney": "DIS", "nike": "NKE", "starbucks": "SBUX", "mcdonalds": "MCD", "coca-cola": "KO",
+    "coke": "KO", "pepsi": "PEP", "walmart": "WMT", "costco": "COST", "boeing": "BA", "ford": "F",
+    "jpmorgan": "JPM", "goldman": "GS", "visa": "V", "mastercard": "MA", "paypal": "PYPL",
+    "uber": "UBER", "airbnb": "ABNB", "spotify": "SPOT", "coinbase": "COIN", "berkshire": "BRK-B",
+    "exxon": "XOM", "chevron": "CVX", "pfizer": "PFE", "bitcoin": "BTC-USD", "ethereum": "ETH-USD",
+    "s&p 500": "SPY", "s&p": "SPY", "nasdaq": "QQQ", "dow": "DIA",
+}
+
+
+def sb_resolve_ticker(query: str) -> str:
+    found = sp_tickers_in(query)
+    if found:
+        return found[0]
+    low = query.lower()
+    for name, tick in sorted(SB_COMPANY_TICKERS.items(), key=lambda kv: -len(kv[0])):
+        if re.search(r"(?<![a-z])" + re.escape(name) + r"(?![a-z])", low):
+            return tick
+    return ""
+
+
+def sb_horizon(query: str) -> int:
+    q = query.lower()
+    if re.search(r"\b(week|7 days|few days)\b", q):
+        return 7
+    if re.search(r"\b(quarter|3 months|three months|90 days)\b", q):
+        return 90
+    return 30
+
+
+def sb_pick_model(query: str, choice: str, page: str = "") -> tuple:
+    """(model id, why) for this question."""
+    juno_ok = juno_status()["installed"]
+    if page:
+        return "web", "Page summaries read the page from the web."
+    if choice == "web":
+        return "web", "You picked FAAM AI."
+    if choice == "titan":
+        return "titan", "You picked Titan."
+    if choice == "juno":
+        if juno_ok:
+            return "juno", "You picked Llama X JUNO."
+        return "web", "Llama X JUNO is still in heavy testing, so FAAM AI answered."
+    ticker = sb_resolve_ticker(query)
+    news = bool(_SB_NEWS.search(query))
+    if _SB_FORECAST.search(query) and ticker and not news:
+        if juno_ok:
+            return "juno", f"It's a forecast question about {ticker}, so Llama X JUNO read the charts."
+        return "web", "It's a forecast question, and Llama X JUNO is still in heavy testing, so FAAM AI searched the web."
+    if _SB_CONCEPT.search(query) and not news and not ticker:
+        if juno_ok:
+            return "juno", "It's a concept question, so Llama X JUNO explained it, free and on this Mac."
+        return "titan", "It's a concept question, so Titan answered."
+    return "web", "It needs current information, so FAAM AI searched the web."
+
+
+def _sb_paragraphs(text: str) -> list:
+    text = re.sub(r"\*\*|__|^#+\s*", "", str(text or ""), flags=re.M).strip()
+    paras = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text) if p.strip()]
+    return paras[:8]
+
+
+def _sb_juno_forecast(query: str):
+    ticker = sb_resolve_ticker(query)
+    if not ticker:
+        return None
+    r = juno_forecast(ticker, sb_horizon(query))
+    if r.get("error"):
+        return None
+    j = r["juno"]
+    top = max(j["bands"], key=lambda b: b["p"])
+    rng = (f"below {top['hi']:+.1f}%" if top["lo"] is None else f"above {top['lo']:+.1f}%" if top["hi"] is None
+           else f"{top['lo']:+.1f}% to {top['hi']:+.1f}%")
+    price = r["price"]
+    paras = [
+        f"Llama X JUNO's read on {r['name']} ({r['symbol']}) for the next {j['days']} trading days: about a "
+        f"{round(j['probUp'] * 100)}% chance it ends higher and {round(j['probDown'] * 100)}% that it ends lower.",
+        f"The most likely outcome is “{top['name']}” ({rng}) at {round(top['p'] * 100)}%. Weighing every "
+        f"outcome, the expected move is about {j['expReturnPct']:+.1f}%, which would put it near "
+        f"${price * (1 + j['expReturnPct'] / 100):,.2f} from ${price:,.2f} today.",
+        "JUNO reads the stock's recent returns, volatility, trend and the market backdrop, not the news. Short-term "
+        "moves are mostly noise, so treat this as odds, not a promise. Information, not financial advice.",
+    ]
+    return {"paragraphs": paras, "ticker": r["symbol"], "junoBands": j["bands"], "junoDays": j["days"]}
+
+
+def _sb_juno_explain(query: str):
+    if not juno_start():
+        return None
+    r = _juno_call("POST", "/chat", {"messages": [{"role": "user", "content": query}], "maxTokens": 350},
+                   timeout=120)
+    paras = _sb_paragraphs(r.get("text") or "")
+    return {"paragraphs": paras} if paras else None
+
+
+def _sb_titan(query: str):
+    hit = titan_recall(query)
+    answer = hit["answer"] if hit else ""
+    if not answer and OPENAI_API_KEY:
+        answer = titan_generate(query) or ""
+        if answer:
+            titan_learn(query, answer)
+    paras = _sb_paragraphs(answer)
+    return {"paragraphs": paras} if paras else None
+
+
+def _sb_web(username: str, query: str, source: str, page: str):
     if not OPENAI_API_KEY:
         return {"error": "Search is not available right now.", "status": 503}
-    key = (source, query.lower(), page)
-    now = time.time()
-    with _SB_LOCK:
-        hit = _SB_CACHE.get(key)
-    if hit and now - hit[0] < SB_CACHE_TTL:
-        return {**hit[1], "cached": True}
     if not _sb_rate_ok(username):
         return {"error": f"That's {SB_HOURLY} searches this hour. Try again a little later.",
                 "status": 429}
@@ -4534,16 +4948,56 @@ def stocks_browser_search(username: str, query, source="web", url="") -> dict:
     record_cost(_sb_cost(result, max(1, parsed["searches"])))
     if not parsed["paragraphs"]:
         return {"error": "The search came back empty. Try wording it differently.", "status": 502}
-    tickers = parsed.pop("tickers")
+    return parsed
+
+
+def stocks_browser_search(username: str, query, source="web", url="", model="auto") -> dict:
+    """One Stocks Browser search (or, with url, a summary of one page), answered
+    by the model the person picked, or the best one for the question."""
+    query = " ".join(str(query or "").split())[:SB_QUERY_MAX]
+    source = source if source in SB_SOURCES else "web"
+    model = model if model in SB_MODELS else "auto"
+    page = _sb_clean_url(url) if url else ""
+    if url and not page:
+        return {"error": "That link can't be opened here.", "status": 400}
+    if not page and len(query) < 2:
+        return {"error": "Type something to search for.", "status": 400}
+    chosen, why = sb_pick_model(query, model, page)
+    key = (chosen, source if chosen == "web" else "", query.lower(), page)
+    now = time.time()
+    with _SB_LOCK:
+        hit = _SB_CACHE.get(key)
+    if hit and now - hit[0] < SB_CACHE_TTL:
+        return {**hit[1], "modelChoice": model, "modelReason": why, "cached": True}
+
+    answer = None
+    if chosen == "juno":
+        forecast = bool(_SB_FORECAST.search(query) and sb_resolve_ticker(query))
+        answer = _sb_juno_forecast(query) if forecast else _sb_juno_explain(query)
+        if not answer:
+            chosen, why = "web", "Llama X JUNO couldn't answer that one, so FAAM AI searched the web."
+    elif chosen == "titan":
+        answer = _sb_titan(query)
+        if not answer:
+            chosen, why = "web", "Titan didn't know that one, so FAAM AI searched the web."
+    if chosen == "web":
+        answer = _sb_web(username, query, source, page)
+        if answer.get("error"):
+            return answer
+    tickers = answer.pop("tickers", None) or ([answer.pop("ticker")] if answer.get("ticker") else
+                                               [t for t in [sb_resolve_ticker(query)] if t])
     out = {"ok": True, "query": query, "source": source, "page": page,
-           "sourceLabel": SB_SOURCES[source]["label"], **parsed,
+           "sourceLabel": SB_SOURCES[source]["label"] if chosen == "web" else SB_MODELS[chosen]["name"],
+           "sources": [], "more": [], **answer,
+           "model": {"id": chosen, "name": SB_MODELS[chosen]["name"],
+                     **({"builtWith": "Built with Llama"} if chosen == "juno" else {})},
            "quote": sb_quote_card(tickers), "searchedAt": int(now)}
     with _SB_LOCK:
         if len(_SB_CACHE) >= SB_CACHE_MAX:
             for k in sorted(_SB_CACHE, key=lambda k: _SB_CACHE[k][0])[:SB_CACHE_MAX // 4]:
                 _SB_CACHE.pop(k, None)
         _SB_CACHE[key] = (now, out)
-    return {**out, "cached": False}
+    return {**out, "modelChoice": model, "modelReason": why, "cached": False}
 
 
 # ---------- Price alerts & notifications ----------
@@ -4770,6 +5224,387 @@ def alerts_loop() -> None:
             alerts_check_once()
         except Exception as e:  # noqa: BLE001
             print(f"   ⚠ alert check failed: {e}")
+
+
+# ---------- FAAM AI agent voice: run FAAM by talking ----------
+# The person says (or types) what they want; the AI maps it onto the commands
+# below — one per button or feature in FAAM — and the page carries them out.
+# The server owns this list, so the AI can only ever pick a known command with
+# validated arguments; the page has a handler for every name (a test checks).
+#   confirm: the page asks "go ahead?" first (anything that deletes or signs out)
+#   dev:     only offered to the dev account
+# Orders are only ever *filled in*; FAAM never places a trade.
+AGENT_HOURLY = 240
+AGENT_MAX_ACTIONS = 6
+AGENT_HISTORY = 6                      # past turns sent for "it" / "that one"
+_AGENT_RATE: dict = {}
+_AGENT_LOCK = threading.Lock()
+_SYM = {"type": "symbol", "desc": "Ticker symbol, e.g. AAPL, NVDA, BTC-USD, ^GSPC"}
+
+
+def _ac(name, desc, params=None, required=(), label="", confirm=False, dev=False):
+    return {"name": name, "desc": desc, "params": params or {}, "required": list(required),
+            "label": label, "confirm": confirm, "dev": dev}
+
+
+AGENT_COMMANDS = [
+    # Stocks & the chart
+    _ac("open_stock", "Show a stock on the dashboard (chart, price, AI insight). FAAM then reads its live price aloud.",
+        {"symbol": _SYM}, ["symbol"], "Open {symbol}"),
+    _ac("set_chart_range", "Change the chart's time range.",
+        {"range": {"type": "enum", "values": ["1D", "1W", "1M", "3M", "1Y", "5Y"]}}, ["range"], "Chart range {range}"),
+    _ac("set_chart_view", "Switch the chart view: line, candles (candlesticks), returns (percent return) or forecast.",
+        {"view": {"type": "enum", "values": ["line", "candles", "returns", "forecast"]}}, ["view"], "{view} view"),
+    _ac("toggle_moving_averages", "Show or hide the 20/50-day moving average lines on the chart.",
+        {"on": {"type": "bool"}}, [], "Moving averages"),
+    _ac("set_forecast_horizon", "Set how far ahead the forecast looks.",
+        {"horizon": {"type": "enum", "values": ["1W", "1M", "3M"]}}, ["horizon"], "Forecast {horizon}"),
+    _ac("choose_forecast_model", "Pick the forecast model: apollo (fast), artemis (Monte Carlo + news), perseverance (ensemble), juno (Llama X JUNO, FAAM's own stock model, in heavy testing).",
+        {"model": {"type": "enum", "values": ["apollo", "artemis", "perseverance", "juno"]}}, ["model"], "Forecast model {model}"),
+    _ac("refresh_ai_insight", "Refresh the AI insight for the current stock.", label="Refresh AI insight"),
+    _ac("compare_with_peers", "Compare a stock with its top sector peers (answer appears in chat).",
+        {"symbol": _SYM}, [], "Compare with peers"),
+    _ac("ask_faam", "Ask FAAM's AI a question about the current stock or investing; the answer is spoken and shown in chat. Use for opinions, outlooks and explanations about a specific stock.",
+        {"question": {"type": "string", "max": 400}}, ["question"], "Ask FAAM"),
+    # Watchlist & portfolio
+    _ac("add_to_watchlist", "Add a stock to the watchlist.", {"symbol": _SYM}, ["symbol"], "Add {symbol} to watchlist"),
+    _ac("remove_from_watchlist", "Remove a stock from the watchlist.", {"symbol": _SYM}, ["symbol"],
+        "Remove {symbol} from your watchlist", confirm=True),
+    _ac("add_watchlist_from_interests", "Add suggested tickers to the watchlist based on the user's portfolio-focus ratings.",
+        label="Add suggested tickers"),
+    _ac("add_portfolio_position", "Record a holding in the portfolio tracker: shares and cost per share, or a dollar amount at today's price.",
+        {"symbol": _SYM, "shares": {"type": "number", "min": 0.000001, "max": 1e9},
+         "cost": {"type": "number", "min": 0, "max": 1e7}, "dollars": {"type": "number", "min": 0.01, "max": 1e9}},
+        ["symbol"], "Track {symbol} in portfolio"),
+    _ac("remove_portfolio_position", "Remove a holding from the portfolio tracker.", {"symbol": _SYM}, ["symbol"],
+        "Remove {symbol} from your portfolio", confirm=True),
+    _ac("show_portfolio", "Scroll to the portfolio panel.", label="Show portfolio"),
+    _ac("fill_order_ticket", "Fill in a buy or sell order ticket for the user to review. It is NEVER placed by FAAM; the user finishes it at their broker.",
+        {"side": {"type": "enum", "values": ["buy", "sell"]}, "symbol": _SYM,
+         "quantity": {"type": "number", "min": 0.000001, "max": 1e9},
+         "unit": {"type": "enum", "values": ["shares", "dollars"]},
+         "broker": {"type": "enum", "values": ["robinhood", "fidelity", "schwab", "etrade", "webull", "coinbase", "other"]}},
+        ["side"], "Fill a {side} ticket"),
+    # Research
+    _ac("search_stocks_browser", "Search the web in the Stocks Browser and show a cited brief. Use for news, 'why is X moving', earnings, anything current.",
+        {"query": {"type": "string", "max": 300},
+         "source": {"type": "enum", "values": list(SB_SOURCES)},
+         "model": {"type": "enum", "values": list(SB_MODELS),
+                   "desc": "Who answers: auto (best for the question, the default), web (FAAM AI web search), "
+                           "juno (Llama X JUNO: forecasts and explanations), titan (quick basics)"}},
+        ["query"], "Search: {query}"),
+    _ac("open_stocks_browser", "Open the Stocks Browser home page.", label="Open Stocks Browser"),
+    _ac("browser_navigate", "Go back, forward or home in the Stocks Browser.",
+        {"to": {"type": "enum", "values": ["back", "forward", "home"]}}, ["to"], "Browser {to}"),
+    _ac("run_screener", "Run the AI stock screener with plain-English criteria.",
+        {"criteria": {"type": "string", "max": 300}}, ["criteria"], "Screen: {criteria}"),
+    _ac("open_screener", "Open the AI screener.", label="Open screener"),
+    _ac("open_trade_ideas", "Open AI trade ideas; refresh=true makes new ones.",
+        {"refresh": {"type": "bool"}}, [], "Trade ideas"),
+    _ac("ask_titan", "Open Titan, FAAM's built-in local AI, optionally asking it a question.",
+        {"question": {"type": "string", "max": 400}}, [], "Ask Titan"),
+    _ac("open_daily_recap", "Open the daily recap video; play=true starts it.", {"play": {"type": "bool"}}, [], "Daily recap"),
+    # Stock Paper
+    _ac("open_stock_paper", "Open the FAAM Stock Paper, optionally a story whose headline matches.",
+        {"story": {"type": "string", "max": 120}}, [], "Open the Stock Paper"),
+    _ac("write_paper_comment", "Type a comment on the open Stock Paper story (the user taps Comment to post).",
+        {"text": {"type": "string", "max": 1000}}, ["text"], "Write a comment"),
+    _ac("draft_paper_story", "Dev: have AI draft a Stock Paper story from a prompt into the composer.",
+        {"prompt": {"type": "string", "max": 600}}, ["prompt"], "Draft a story", dev=True),
+    _ac("polish_paper_story", "Dev: polish the story in the composer.",
+        {"grammar": {"type": "bool"}, "developing": {"type": "bool"}, "picture": {"type": "bool"}}, [],
+        "Polish the story", dev=True),
+    _ac("publish_paper_story", "Dev: publish the story in the composer.", label="Publish this story",
+        confirm=True, dev=True),
+    # FAAM Learn
+    _ac("open_learn", "Open FAAM Learn.", label="Open FAAM Learn"),
+    _ac("open_learn_course", "Open a FAAM Learn course.",
+        {"course": {"type": "enum", "values": [c["id"] for c in LEARN_LIBRARY],
+                    "desc": "; ".join(f'{c["id"]} = {c["title"]}' for c in LEARN_LIBRARY)}},
+        ["course"], "Open course"),
+    _ac("start_learn_diagnostic", "Start the FAAM Learn placement quiz.", label="Start the placement quiz"),
+    _ac("claim_daily_reward", "Claim today's FAAM Learn daily reward.", label="Claim daily reward"),
+    _ac("open_leaderboard", "Open the FAAM Learn leaderboard.", label="Open leaderboard"),
+    _ac("open_stock_course", "Open the Stock Learning Lab (stock diagnostic + course).", label="Open the stock course"),
+    # Alerts & notifications
+    _ac("set_price_alert", "Create a price alert: above/below a price, or up/down a percent today.",
+        {"symbol": _SYM, "condition": {"type": "enum", "values": ["above", "below", "up", "down"]},
+         "value": {"type": "number", "min": 0.0001, "max": 1e7}},
+        ["symbol", "condition", "value"], "Alert: {symbol} {condition} {value}"),
+    _ac("delete_price_alert", "Delete the price alerts for a stock.", {"symbol": _SYM}, ["symbol"],
+        "Delete your {symbol} alerts", confirm=True),
+    _ac("open_notifications", "Open notifications (inbox) or the price alerts list.",
+        {"tab": {"type": "enum", "values": ["inbox", "alerts"]}}, [], "Open notifications"),
+    _ac("mark_notifications_read", "Mark all notifications as read.", label="Mark all read"),
+    _ac("clear_notifications", "Delete all notifications.", label="Clear all notifications", confirm=True),
+    # Settings, account & the app
+    _ac("open_settings", "Open Settings.", label="Open Settings"),
+    _ac("set_beginner_mode", "Turn beginner mode on or off.", {"on": {"type": "bool"}}, ["on"], "Beginner mode"),
+    _ac("set_prediction_markets", "Turn the prediction-markets add-on on or off.", {"on": {"type": "bool"}}, ["on"],
+        "Prediction markets"),
+    _ac("set_theme", "Switch between dark and light mode.", {"theme": {"type": "enum", "values": ["dark", "light"]}},
+        ["theme"], "{theme} mode"),
+    _ac("start_tour", "Start the guided tour of FAAM.", label="Start the tour"),
+    _ac("open_layout_editor", "Open the dashboard layout editor.", label="Customize dashboard"),
+    _ac("design_layout", "Have AI design the dashboard layout from a description.",
+        {"prompt": {"type": "string", "max": 400}}, ["prompt"], "Design my dashboard"),
+    _ac("reset_layout", "Reset the dashboard to the default layout.", label="Reset the dashboard layout",
+        confirm=True),
+    _ac("open_adviser_profile", "Open the financial adviser profile (the AI's persona and house rules).",
+        label="Open adviser profile"),
+    _ac("use_adviser_template", "Fill the adviser profile with FAAM's template (the user saves it).",
+        label="Fill adviser template"),
+    _ac("clear_adviser_profile", "Clear the adviser profile.", label="Clear your adviser profile", confirm=True),
+    _ac("open_whats_new", "Open What's new (the update log and what's coming).", label="What's new"),
+    _ac("open_plans", "Open FAAM's plans / upgrade page.", label="Open plans"),
+    _ac("open_account", "Open the account panel.", label="Open account"),
+    _ac("open_connected_apps", "Show apps connected to the FAAM account.", label="Connected apps"),
+    _ac("log_out", "Sign out of FAAM.", label="Log out of FAAM", confirm=True),
+    _ac("open_in_web_browser", "Open FAAM in the computer's web browser (desktop app only).", label="Open in browser"),
+    _ac("open_chat", "Open the FAAM chat window.", label="Open chat"),
+    _ac("close_window", "Close the window or panel on top.", label="Close"),
+    _ac("close_everything", "Close every open window and go back to the dashboard.", label="Back to dashboard"),
+    _ac("scroll_page", "Scroll the page or open panel.", {"direction": {"type": "enum", "values": ["up", "down", "top", "bottom"]}},
+        ["direction"], "Scroll {direction}"),
+    _ac("stop_voice", "Stop the voice agent (the user said stop, bye, close voice).", label="Stop voice"),
+    # Catch-alls, so every button on screen is reachable
+    _ac("press_button", "Press a button that's visible on screen, by its words, for anything without its own "
+        "command: Next, Back, Check answer, Start review, Continue, Retake, Try again and so on.",
+        {"label": {"type": "string", "max": 80}}, ["label"], "Press “{label}”"),
+    _ac("choose_answer", "Pick an answer in a FAAM Learn quiz, review or the stock course by its letter.",
+        {"choice": {"type": "enum", "values": ["A", "B", "C", "D", "E", "F"]}}, ["choice"], "Answer {choice}"),
+    # Dev: the stock simulator
+    _ac("open_simulator", "Dev: open the stock simulator.", label="Open simulator", dev=True),
+    _ac("simulator_action", "Dev: in the simulator, buy/sell shares or skip ahead.",
+        {"action": {"type": "enum", "values": ["start", "buy", "sell", "next_day", "next_week", "end", "max"]},
+         "shares": {"type": "number", "min": 1, "max": 1e6}}, ["action"], "Simulator: {action}", dev=True),
+]
+AGENT_BY_NAME = {c["name"]: c for c in AGENT_COMMANDS}
+# What FAAM says while doing it. The AI usually sends no words with a command,
+# and "Chart range 1Y." is no way to talk; anything missing here is derived
+# from the label ("Open Settings" -> "Opening Settings.").
+AGENT_SAY = {
+    "open_stock": "Opening {symbol}.", "set_chart_range": "Showing {range}.",
+    "set_chart_view": "Switching to the {view} view.", "toggle_moving_averages": "Done.",
+    "set_forecast_horizon": "Forecasting {horizon} ahead.", "choose_forecast_model": "Switching to {model}.",
+    "refresh_ai_insight": "Refreshing the insight.", "compare_with_peers": "Comparing it with its peers.",
+    "ask_faam": "Let me think about that.", "add_to_watchlist": "Adding {symbol} to your watchlist.",
+    "add_watchlist_from_interests": "Adding some picks for you.",
+    "add_portfolio_position": "Adding {symbol} to your portfolio.", "show_portfolio": "Here's your portfolio.",
+    "fill_order_ticket": "Filling in a {side} ticket for you.", "search_stocks_browser": "Searching for that.",
+    "browser_navigate": "Going {to}.",
+    "run_screener": "Running that screen.", "ask_titan": "Asking Titan.",
+    "write_paper_comment": "I've written your comment.", "draft_paper_story": "Drafting a story.",
+    "polish_paper_story": "Polishing the story.", "claim_daily_reward": "Claiming your daily reward.",
+    "start_learn_diagnostic": "Starting the placement quiz.", "set_price_alert": "Setting that alert.",
+    "mark_notifications_read": "All caught up.", "set_beginner_mode": "Done.",
+    "set_prediction_markets": "Done.", "set_theme": "Switching to {theme} mode.",
+    "start_tour": "Starting the tour.", "design_layout": "Designing your dashboard.",
+    "use_adviser_template": "Filling in the template.", "close_window": "Closing it.",
+    "close_everything": "Back to the dashboard.", "scroll_page": "Scrolling {direction}.",
+    "stop_voice": "Bye for now.", "simulator_action": "Okay.", "press_button": "Pressing {label}.",
+    "choose_answer": "Going with {choice}.",
+}
+
+
+def _agent_say(cmd: dict, args: dict) -> str:
+    if cmd["name"] == "choose_forecast_model" and args.get("model") == "juno" and not juno_status()["installed"]:
+        return f"{JUNO_NAME} is still in heavy testing, so I kept your current model."
+    tpl = AGENT_SAY.get(cmd["name"])
+    if tpl:
+        try:
+            return tpl.format(**{k: (f"{v:g}" if isinstance(v, float) else str(v)) for k, v in args.items()})
+        except (KeyError, IndexError, ValueError):
+            pass
+    label = _agent_label(cmd, args)
+    return ("Opening " + label[5:] if label.startswith("Open ") else label) + "."
+
+AGENT_SYSTEM = (
+    "You are FAAM's voice agent. You operate the FAAM stock dashboard for the person by calling "
+    "commands; every button in FAAM has a command.\n"
+    "Rules:\n"
+    "- If they ask FAAM to do something, call the matching command(s), in order. Several are fine "
+    "(e.g. open_stock then set_chart_range).\n"
+    "- Use real tickers: Apple=AAPL, Nvidia=NVDA, Tesla=TSLA, Google=GOOGL, Amazon=AMZN, Microsoft=MSFT, "
+    "S&P 500=^GSPC, Nasdaq=^IXIC, Dow=^DJI, Bitcoin=BTC-USD, Ethereum=ETH-USD.\n"
+    "- 'it', 'this' or 'this stock' means the current stock.\n"
+    "- FAAM never places trades. For buy/sell requests use fill_order_ticket; the person reviews it "
+    "and finishes at their broker.\n"
+    "- Never state prices, percentages or news yourself. open_stock reads the live price; for news, "
+    "'why is it moving' or anything current, use search_stocks_browser; for opinions or analysis of a "
+    "stock, use ask_faam.\n"
+    "- For a quick general question about an investing idea (what is an ETF?), just answer in one or "
+    "two short sentences with no command.\n"
+    "- For anything on screen without its own command (Next, Check answer, Start review, Continue), "
+    "use press_button with the button's words; for quiz answers use choose_answer.\n"
+    "- If the request is unclear, ask one short question instead of guessing.\n"
+    "- Always also reply with one short, friendly spoken sentence about what you're doing "
+    "(\"Opening Apple.\"). Plain words, no markdown, no lists."
+)
+
+
+def _agent_tool(cmd: dict) -> dict:
+    props = {}
+    for pname, spec in cmd["params"].items():
+        t = spec["type"]
+        if t in ("symbol", "string"):
+            p = {"type": "string"}
+        elif t == "enum":
+            p = {"type": "string", "enum": spec["values"]}
+        elif t == "number":
+            p = {"type": "number"}
+        else:
+            p = {"type": "boolean"}
+        if spec.get("desc"):
+            p["description"] = spec["desc"]
+        props[pname] = p
+    return {"type": "function", "function": {
+        "name": cmd["name"], "description": cmd["desc"],
+        "parameters": {"type": "object", "properties": props, "required": cmd["required"]}}}
+
+
+def agent_tools(is_dev: bool) -> list:
+    return [_agent_tool(c) for c in AGENT_COMMANDS if is_dev or not c["dev"]]
+
+
+def agent_clean_args(cmd: dict, args) -> dict | None:
+    """Check the AI's arguments against the command. None = drop the action."""
+    if not isinstance(args, dict):
+        return None
+    out = {}
+    for pname, spec in cmd["params"].items():
+        if pname not in args or args[pname] in (None, ""):
+            continue
+        v, t = args[pname], spec["type"]
+        if t == "symbol":
+            v = str(v).strip().upper().lstrip("$").replace(" ", "")
+            if not _TICKER_RE.match(v):
+                return None
+        elif t == "string":
+            v = " ".join(str(v).split())[:spec.get("max", 200)]
+            if not v:
+                continue
+        elif t == "enum":
+            v = str(v).strip()
+            if v not in spec["values"]:
+                return None
+        elif t == "number":
+            if isinstance(v, bool):
+                return None
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return None
+            if math.isnan(v) or math.isinf(v) or not (spec.get("min", -1e12) <= v <= spec.get("max", 1e12)):
+                return None
+        else:
+            if not isinstance(v, bool):
+                v = str(v).strip().lower() in ("true", "1", "yes", "on")
+        out[pname] = v
+    if any(r not in out for r in cmd["required"]):
+        return None
+    return out
+
+
+def _agent_label(cmd: dict, args: dict) -> str:
+    def fmt(v):
+        if isinstance(v, float):
+            return f"{v:g}"
+        return str(v)
+    try:
+        return cmd["label"].format(**{k: fmt(v) for k, v in args.items()}) if cmd["label"] else cmd["name"]
+    except (KeyError, IndexError, ValueError):
+        return re.sub(r"\s*\{[^}]*\}", "", cmd["label"]).strip() or cmd["name"]
+
+
+def _agent_ai(messages: list, tools: list) -> dict:
+    payload = {"model": OPENAI_MODEL, "messages": messages, "tools": tools,
+               "tool_choice": "auto", "parallel_tool_calls": True,
+               "temperature": 0.2, "max_tokens": 500}
+    req = urllib.request.Request(
+        OPENAI_URL, data=json.dumps(payload).encode("utf-8"), method="POST",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=45) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        return {"error": f"AI service error {e.code}",
+                "detail": e.read().decode("utf-8", errors="replace")[:400]}
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return {"error": f"network error: {e}"}
+
+
+def _agent_rate_ok(username: str) -> bool:
+    now = time.time()
+    with _AGENT_LOCK:
+        hits = [t for t in _AGENT_RATE.get(username, []) if now - t < 3600]
+        ok = len(hits) < AGENT_HOURLY
+        if ok:
+            hits.append(now)
+        _AGENT_RATE[username] = hits
+        return ok
+
+
+def agent_context_line(ctx) -> str:
+    ctx = ctx if isinstance(ctx, dict) else {}
+    active = str(ctx.get("active") or "").upper()
+    active = active if _TICKER_RE.match(active) else "none"
+    def items(v):
+        return v if isinstance(v, list) else []
+    screens = [s[:30] for s in items(ctx.get("screens")) if isinstance(s, str)][:6]
+    watch = [s.upper() for s in items(ctx.get("watchlist")) if isinstance(s, str)
+             and _TICKER_RE.match(s.upper())][:20]
+    return (f"Current stock: {active}. Open screens: {', '.join(screens) or 'dashboard'}. "
+            f"Watchlist: {', '.join(watch) or 'empty'}.")
+
+
+def agent_run(username: str, text, ctx=None, history=None) -> dict:
+    """One turn: what the person said -> a spoken reply and validated actions."""
+    text = " ".join(str(text or "").split())[:600]
+    if not text:
+        return {"error": "I didn't catch that.", "status": 400}
+    if not OPENAI_API_KEY:
+        return {"error": "Voice control isn't available right now.", "status": 503}
+    if not _agent_rate_ok(username):
+        return {"error": "That's a lot of commands this hour. Give it a little while.", "status": 429}
+    is_dev = is_admin_username(username)
+    msgs = [{"role": "system", "content": AGENT_SYSTEM + "\n" + agent_context_line(ctx)}]
+    for h in (history if isinstance(history, list) else [])[-AGENT_HISTORY:]:
+        if isinstance(h, dict) and h.get("role") in ("user", "assistant") and isinstance(h.get("content"), str):
+            msgs.append({"role": h["role"], "content": h["content"][:600]})
+    msgs.append({"role": "user", "content": text})
+    result = _agent_ai(msgs, agent_tools(is_dev))
+    if result.get("error"):
+        return {"error": "Voice control is unavailable right now. Try again in a moment.", "status": 502}
+    record_cost(chat_cost(result))
+    msg = ((result.get("choices") or [{}])[0].get("message") or {})
+    actions = []
+    for call in (msg.get("tool_calls") or [])[:AGENT_MAX_ACTIONS * 2]:
+        fn = (call or {}).get("function") or {}
+        cmd = AGENT_BY_NAME.get(fn.get("name"))
+        if not cmd or (cmd["dev"] and not is_dev):
+            continue
+        try:
+            raw = json.loads(fn.get("arguments") or "{}")
+        except ValueError:
+            continue
+        args = agent_clean_args(cmd, raw)
+        if args is None:
+            continue
+        actions.append({"name": cmd["name"], "args": args, "confirm": cmd["confirm"],
+                        "label": _agent_label(cmd, args)})
+        if len(actions) >= AGENT_MAX_ACTIONS:
+            break
+    say = re.sub(r"[*_#`>]+", "", (msg.get("content") or "")).strip()[:500]
+    if not say:
+        if not actions:
+            say = "Sorry, I couldn't do that one."
+        elif actions[0]["confirm"]:
+            say = ""                         # the page asks "…? Say yes or tap Confirm."
+        else:
+            first = actions[0]
+            say = _agent_say(AGENT_BY_NAME[first["name"]], first["args"])
+    return {"ok": True, "say": say, "actions": actions}
 
 
 # ---------- FAAM Connect: sign FAAM's other apps in to a FAAM account ----------
@@ -6211,10 +7046,15 @@ NOT FINANCIAL ADVICE.
                 "provider": user.get("provider", "local"),
             })
 
+        if path == "/api/juno":
+            return self._json(juno_status())
+
         # ---- Stocks Browser, alerts & notifications
         if path == "/api/browser/sources":
             return self._json({"sources": [{"id": k, "label": v["label"]}
                                            for k, v in SB_SOURCES.items()],
+                               "models": [{"id": k, **v, "ready": k != "juno" or juno_status()["installed"]}
+                                          for k, v in SB_MODELS.items()],
                                "available": bool(OPENAI_API_KEY)})
         if path in ("/api/alerts", "/api/notifications"):
             if not user:
@@ -6737,17 +7577,21 @@ NOT FINANCIAL ADVICE.
                               set_cookie=self._session_cookie(token))
 
         # ---- Stocks Browser, alerts & notifications
-        if path == "/api/browser/search" or path.startswith(("/api/alerts/", "/api/notifications/")):
+        if path in ("/api/browser/search", "/api/agent") or path.startswith(("/api/alerts/", "/api/notifications/")):
             u = self._current_user()
             if not u:
                 return self._json({"error": "Log in first."}, 401)
             body = self._read_json()
             name = u["username"]
-            if path == "/api/browser/search":
+            if path == "/api/agent":
+                if usage_blocked():
+                    return self._json(USAGE_LIMIT_MSG, 402)
+                res = agent_run(name, body.get("text"), body.get("context"), body.get("history"))
+            elif path == "/api/browser/search":
                 if usage_blocked():
                     return self._json(USAGE_LIMIT_MSG, 402)
                 res = stocks_browser_search(name, body.get("query"), body.get("source") or "web",
-                                            str(body.get("url") or ""))
+                                            str(body.get("url") or ""), str(body.get("model") or "auto"))
             elif path == "/api/alerts/create":
                 res = alerts_create(name, body.get("symbol"), body.get("kind"), body.get("value"))
             elif path == "/api/alerts/delete":
